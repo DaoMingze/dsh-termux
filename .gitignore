@@ -36,3 +36,7 @@ dsh-termux-patches.tar.gz
 
 # Legacy alias that the original AGENTS.md ignore also covered
 AGENT.md
+.workbuddy
+.agents/skills
+.aisa
+conventions/

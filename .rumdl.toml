@@ -1,0 +1,17 @@
+[global]
+disable = ["MD033", "MD036", "MD041", "MD064"]
+line-length = 800
+
+
+[MD013]
+reflow = true
+reflow-mode = "normalize"
+
+[MD025]
+front-matter-title = ""
+
+[MD060]
+enabled = true
+style = "tight"
+aligned-delimiter = false
+loose-last-column = false

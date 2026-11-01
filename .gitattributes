@@ -1,0 +1,4 @@
+# 产物按字节校验：换行必须全仓一致。
+# Windows 上 core.autocrlf=true 会把检出文件变成 CRLF，与模板字节不符，
+# check 就会对着一个没改过的仓报漂移。这里把规则钉死为 LF，与平台无关。
+* text=auto eol=lf
