@@ -40,3 +40,4 @@ AGENT.md
 .agents/skills
 .aisa
 conventions/
+.patch-probe/

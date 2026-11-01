@@ -4,9 +4,26 @@ Run [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) 
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+## Current upstream versions
+
+Badges are rendered live by shields.io at view time — they always reflect what npm / nodejs.org serve right now, no rebuild needed.
+
+<!-- Maintenance note: the npm/pnpm prerelease badges pin the current major line's
+dist-tag (`next-12`). When either project ships a new major, bump the tag here. -->
+
+||LTS/Stable|Preview|
+|---|---|---|
+|[Node.js](https://nodejs.org/)|![Node.js stable](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fendoflife.date%2Fapi%2Fnodejs.json&query=%24%5B0%5D.latest&label=Node.js&prefix=v)|![Node.js stable](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fendoflife.date%2Fapi%2Fnodejs.json&query=%24%5B2%5D.latest&label=Node.js&prefix=v)|
+|[npm](https://www.npmjs.com/package/npm)|![npm stable](https://img.shields.io/npm/v/npm?label=npm)|![npm pre](https://img.shields.io/npm/v/npm/next-12?label=npm%20pre)|
+|[pnpm](https://www.npmjs.com/package/pnpm)|![pnpm stable](https://img.shields.io/npm/v/pnpm?label=pnpm)|![pnpm pre](https://img.shields.io/npm/v/pnpm/next-12?label=pnpm%20pre)|
+|[dsh](https://www.npmjs.com/package/@deepseek-ai/dsh)|![dsh stable](https://img.shields.io/npm/v/%40deepseek-ai/dsh?label=dsh)|![dsh pre](https://img.shields.io/npm/v/%40deepseek-ai/dsh/alpha?label=dsh%20pre)|
+
+Note: dsh's `next` dist-tag currently points at the same build as `latest`, so the prerelease column shows the `alpha` tag — the freshest published line. This project pins Node 24 (see [NODE_VERSION](NODE_VERSION)); the Node.js badges above track upstream, not this pin.
+
 ## Why this approach
 
-The usual ways to run a glibc Node app on Android are recompiling everything against Termux's own (bionic) Node, or a proot/glibc chroot. Recompiling forks dsh's entire native dependency chain into a second build you must maintain forever; a chroot adds a translation layer whose file semantics and activity launches still do not match Android's rules. dsh-termux instead ships the **official** Node.js linux-arm64 binary — the exact build npm's prebuilt modules were compiled for — on Termux's own glibc runtime, so upstream dsh and its dependencies run unmodified and nothing is ever compiled on-device. Only a small patch set adapts the Android-specific problems that remain (SELinux link policy, intent-based browser handoff, Landlock tmpdir grants, cross-site session cookies), and the bundled updater re-verifies it on every run; the complete index is [PATCHES.md](PATCHES.md).
+The usual ways to run a glibc Node app on Android are recompiling everything against Termux's own (bionic) Node, or a proot/glibc chroot. Recompiling forks dsh's entire native dependency chain into a second build you must maintain forever; a chroot adds a translation layer whose file semantics and activity launches still do not match Android's rules. dsh-termux instead ships the **official** Node.js linux-arm64 binary — the exact build npm's prebuilt modules were compiled for — on Termux's own glibc runtime, so upstream dsh and its dependencies run unmodified and nothing is ever compiled on-device. Only a small patch set adapts the Android-specific problems that remain (SELinux link policy, intent-based browser handoff, Landlock tmpdir grants, cross-site session cookies), and the bundled
+updater re-verifies it on every run; the complete index is [PATCHES.md](PATCHES.md).
 
 ## Installation
 
@@ -51,22 +68,17 @@ dsh update -t next -y # straight to the npm `next` dist-tag, prompts auto-accept
 dsh update --self     # refresh the patch set and apply it (no npm download)
 ```
 
-`dsh update` moves the dsh version and re-applies the Android patches (needs `git`
-on the device — `pkg install git`). The patch set itself ships with this project's
-releases, not npm; every update refreshes it automatically when a newer release
-exists. `--self` is the patches-only path: it refreshes the updater + patch set
-from the latest release and applies them to the installed dsh directly, without
-downloading a new npm package.
+`dsh update` moves the dsh version and re-applies the Android patches (needs `git` on the device — `pkg install git`). The patch set itself ships with this project's releases, not npm; every update refreshes it automatically when a newer release exists. `--self` is the patches-only path: it refreshes the updater + patch set from the latest release and applies them to the installed dsh directly, without downloading a new npm package.
 
-| Flag | Effect |
+|Flag|Effect|
 |---|---|
-| `-t, --tag TAG` | install a dist-tag directly (e.g. `next`), no version menu |
-| `-v, --version VER` | install an exact version directly (e.g. `0.1.1-rc.2`), no version menu |
-| `-y, --yes` | auto-accept every prompt |
-| `--self` | refresh the updater + patch set from the latest release and apply it to the installed dsh (no npm update; `-t`/`-v` are ignored) |
-| `--patch-set PATH` | use a local patch set (a directory or `.tar.gz` with `scripts/` + `patches/` + `VERSION`) instead of downloading; implies `--self` and works offline |
-| `--force` | with `--self`/`--patch-set`: re-apply even when the machinery is already current |
-| (no `-t`/`-v`) | interactive version menu, Enter defaults to `latest` |
+|`-t, --tag TAG`|install a dist-tag directly (e.g. `next`), no version menu|
+|`-v, --version VER`|install an exact version directly (e.g. `0.1.1-rc.2`), no version menu|
+|`-y, --yes`|auto-accept every prompt|
+|`--self`|refresh the updater + patch set from the latest release and apply it to the installed dsh (no npm update; `-t`/`-v` are ignored)|
+|`--patch-set PATH`|use a local patch set (a directory or `.tar.gz` with `scripts/` + `patches/` + `VERSION`) instead of downloading; implies `--self` and works offline|
+|`--force`|with `--self`/`--patch-set`: re-apply even when the machinery is already current|
+|(no `-t`/`-v`)|interactive version menu, Enter defaults to `latest`|
 
 `dsh update` never restarts a running `dsh web` — start it again yourself afterwards.
 
@@ -86,17 +98,13 @@ The line tagged `# dsh-termux` in `~/.bashrc` must be deleted manually.
 
 ## FAQ
 
-**`dsh web` doesn't open the browser?**
-Most common cause: Termux was in the background — Android 10+ silently drops activity launches from background apps. Keep Termux in the foreground, or open the printed URL manually. Background details: [Fix 3](PATCHES.md#fix-3-browser-handoff).
+**`dsh web` doesn't open the browser?** Most common cause: Termux was in the background — Android 10+ silently drops activity launches from background apps. Keep Termux in the foreground, or open the printed URL manually. Background details: [Fix 3](PATCHES.md#fix-3-browser-handoff).
 
-**Update stopped with "Patch does not apply / version drift"?**
-A newly published dsh changed the patched files. This is the intended safety stop — dsh stays installed but unpatched, so session saves and the write tool may fail with `EACCES` on Android. File an [issue](https://github.com/ErEbusE/dsh-termux/issues) or regenerate the patches per [PATCHES.md](PATCHES.md).
+**Update stopped with "Patch does not apply / version drift"?** A newly published dsh changed the patched files. This is the intended safety stop — dsh stays installed but unpatched, so session saves and the write tool may fail with `EACCES` on Android. File an [issue](https://github.com/ErEbusE/dsh-termux/issues) or regenerate the patches per [PATCHES.md](PATCHES.md).
 
-**`dsh update` unknown on a long-overdue install?**
-Runtimes from releases before 1.1.0 have no wrapper shortcut: run the bundled updater directly — `bash ~/.local/opt/dsh-termux-runtime/scripts/update-dsh.sh -t next -y`. From 1.1.0+ the `dsh update` shortcut keeps itself current; runtimes from before 1.2.1 also lack the automatic patch-set refresh (updates proceed on the old set, with a notice), and a fresh Option A install brings them fully current.
+**`dsh update` unknown on a long-overdue install?** Runtimes from releases before 1.1.0 have no wrapper shortcut: run the bundled updater directly — `bash ~/.local/opt/dsh-termux-runtime/scripts/update-dsh.sh -t next -y`. From 1.1.0+ the `dsh update` shortcut keeps itself current; runtimes from before 1.2.1 also lack the automatic patch-set refresh (updates proceed on the old set, with a notice), and a fresh Option A install brings them fully current.
 
-**Where is my data?**
-dsh data lives in `~/.dsh/` (upstream default); this project's runtime in `~/.local/opt/dsh-termux-runtime/`.
+**Where is my data?** dsh data lives in `~/.dsh/` (upstream default); this project's runtime in `~/.local/opt/dsh-termux-runtime/`.
 
 ## Contributing
 
@@ -104,7 +112,7 @@ Issues and PRs are welcome. The contributor workflow — testing gates (sandbox 
 
 ## Project layout
 
-```
+```text
 dsh-termux/
 ├─ patches/                  Android patches (over dsh's compiled npm lib files)
 ├─ scripts/                  install/update pipeline (runs on Termux)

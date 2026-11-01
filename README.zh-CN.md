@@ -4,6 +4,22 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
+## 上游当前版本
+
+徽章由 shields.io 在页面渲染时实时生成,始终反映 npm / nodejs.org 当下发布的版本,无需重新构建。
+
+<!-- 维护提示:npm/pnpm 的预发布徽章钉在当前主线的 dist-tag(`next-12`)上。
+任一项目发布新的大版本时,需要同步更新这里的标签。 -->
+
+||LTS/Stable|Preview|
+|---|---|---|
+|[Node.js](https://nodejs.org/)|![Node.js stable](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fendoflife.date%2Fapi%2Fnodejs.json&query=%24%5B0%5D.latest&label=Node.js&prefix=v)|![Node.js stable](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fendoflife.date%2Fapi%2Fnodejs.json&query=%24%5B2%5D.latest&label=Node.js&prefix=v)|
+|[npm](https://www.npmjs.com/package/npm)|![npm stable](https://img.shields.io/npm/v/npm?label=npm)|![npm pre](https://img.shields.io/npm/v/npm/next-12?label=npm%20pre)|
+|[pnpm](https://www.npmjs.com/package/pnpm)|![pnpm stable](https://img.shields.io/npm/v/pnpm?label=pnpm)|![pnpm pre](https://img.shields.io/npm/v/pnpm/next-12?label=pnpm%20pre)|
+|[dsh](https://www.npmjs.com/package/@deepseek-ai/dsh)|![dsh stable](https://img.shields.io/npm/v/%40deepseek-ai/dsh?label=dsh)|![dsh pre](https://img.shields.io/npm/v/%40deepseek-ai/dsh/alpha?label=dsh%20pre)|
+
+说明:dsh 的 `next` 标签当前与 `latest` 指向同一构建,所以预发布列改用 `alpha` 标签——即最新发布的开发线。本项目钉住 Node 24(见 [NODE_VERSION](NODE_VERSION));上表 Node.js 徽章跟踪的是上游,不是本项目的钉定值。
+
 ## 为什么这样做
 
 在安卓上跑一个需要 glibc 的 Node 应用,一般方案是两条:要么把依赖全部对着 Termux 自带的(bionic)Node 重新编译,要么塞进 proot/glibc chroot。重新编译等于把 dsh 的整条原生依赖链 fork 成一份需要永久维护的第二构建;chroot 则多出一层转译,其文件语义与 activity 启动仍不符合安卓的规则。本项目走第三条路:在 Termux 自己的 glibc 运行时上安装**官方** Node.js linux-arm64 二进制——npm 预编译模块正是为这个构建编译的——上游 dsh 及其依赖原样运行,设备上从不编译任何东西。剩下的安卓特有问题(SELinux 链接策略、经 intent 的浏览器交接、Landlock 的 tmpdir 授权、跨站会话 cookie)只由一个小补丁集适配,随附的更新器每次运行都会重新校验它;完整清单见 [PATCHES.md](PATCHES.md)。
@@ -51,20 +67,17 @@ dsh update -t next -y # 直接更新到 npm 的 next 标签,自动接受所有�
 dsh update --self     # 刷新补丁集并直接应用(不下载 npm 包)
 ```
 
-`dsh update` 会更新 dsh 版本并重打安卓补丁(需要设备上装有 `git`:`pkg install git`)。
-补丁集随本项目的 release 演进、不走 npm;每次更新发现更新 release 时会自动刷新。
-`--self` 是「只打补丁」路径:从最新 release 刷新更新器 + 补丁集,并直接应用到已安装的
-dsh,不下载新的 npm 包。
+`dsh update` 会更新 dsh 版本并重打安卓补丁(需要设备上装有 `git`:`pkg install git`)。 补丁集随本项目的 release 演进、不走 npm;每次更新发现更新 release 时会自动刷新。 `--self` 是「只打补丁」路径:从最新 release 刷新更新器 + 补丁集,并直接应用到已安装的 dsh,不下载新的 npm 包。
 
-| 参数 | 作用 |
+|参数|作用|
 |---|---|
-| `-t, --tag TAG` | 直接安装某个 dist-tag(如 `next`),不弹版本菜单 |
-| `-v, --version VER` | 直接安装某个精确版本(如 `0.1.1-rc.2`),不弹版本菜单 |
-| `-y, --yes` | 自动接受所有提示 |
-| `--self` | 从最新 release 刷新更新器 + 补丁集并直接应用(不做 npm 更新;`-t`/`-v` 被忽略) |
-| `--patch-set PATH` | 用本地补丁集(含 `scripts/` + `patches/` + `VERSION` 的目录或 `.tar.gz`)代替下载;隐含 `--self`,可离线 |
-| `--force` | 与 `--self`/`--patch-set` 同用:机件未变化时也强制重打 |
-| (不带 `-t`/`-v`) | 交互式版本菜单,回车默认 `latest` |
+|`-t, --tag TAG`|直接安装某个 dist-tag(如 `next`),不弹版本菜单|
+|`-v, --version VER`|直接安装某个精确版本(如 `0.1.1-rc.2`),不弹版本菜单|
+|`-y, --yes`|自动接受所有提示|
+|`--self`|从最新 release 刷新更新器 + 补丁集并直接应用(不做 npm 更新;`-t`/`-v` 被忽略)|
+|`--patch-set PATH`|用本地补丁集(含 `scripts/` + `patches/` + `VERSION` 的目录或 `.tar.gz`)代替下载;隐含 `--self`,可离线|
+|`--force`|与 `--self`/`--patch-set` 同用:机件未变化时也强制重打|
+|(不带 `-t`/`-v`)|交互式版本菜单,回车默认 `latest`|
 
 `dsh update` 不会重启正在运行的 `dsh web`,更新后请自己重新启动。
 
@@ -84,17 +97,13 @@ rm -rf ~/.dsh    # dsh 的数据(配置/会话);确认不需要再删——删�
 
 ## 常见问题
 
-**`dsh web` 打不开浏览器?**
-最常见原因:启动时 Termux 在后台——Android 10+ 会静默丢弃后台应用发起的 activity 启动。让 Termux 保持前台,或手动打开打印出的 URL。背景细节见[修复 3](PATCHES.md#fix-3-browser-handoff)。
+**`dsh web` 打不开浏览器?** 最常见原因:启动时 Termux 在后台——Android 10+ 会静默丢弃后台应用发起的 activity 启动。让 Termux 保持前台,或手动打开打印出的 URL。背景细节见[修复 3](PATCHES.md#fix-3-browser-handoff)。
 
-**更新时报 "Patch does not apply / version drift"?**
-说明 npm 上新发布的 dsh 改动了补丁目标文件。这是预期内的保护机制——此时 dsh 保持已安装但未打补丁,Android 上会话保存/write 工具可能报 `EACCES`。请到 [Issues](https://github.com/ErEbusE/dsh-termux/issues) 提报,或按 [PATCHES.md](PATCHES.md) 重新生成补丁。
+**更新时报 "Patch does not apply / version drift"?** 说明 npm 上新发布的 dsh 改动了补丁目标文件。这是预期内的保护机制——此时 dsh 保持已安装但未打补丁,Android 上会话保存/write 工具可能报 `EACCES`。请到 [Issues](https://github.com/ErEbusE/dsh-termux/issues) 提报,或按 [PATCHES.md](PATCHES.md) 重新生成补丁。
 
-**装了很久没更新,`dsh update` 不识别?**
-1.1.0 之前的 runtime 没有包装脚本快捷方式:直接运行内置更新器——`bash ~/.local/opt/dsh-termux-runtime/scripts/update-dsh.sh -t next -y`。升到 1.1.0+ 后 `dsh update` 快捷方式会随每次更新自我保持;1.2.1 之前的 runtime 还没有补丁集自动刷新(更新会带着旧补丁集继续,并有提示),用方案A 重装一次即可全部补齐。
+**装了很久没更新,`dsh update` 不识别?** 1.1.0 之前的 runtime 没有包装脚本快捷方式:直接运行内置更新器——`bash ~/.local/opt/dsh-termux-runtime/scripts/update-dsh.sh -t next -y`。升到 1.1.0+ 后 `dsh update` 快捷方式会随每次更新自我保持;1.2.1 之前的 runtime 还没有补丁集自动刷新(更新会带着旧补丁集继续,并有提示),用方案A 重装一次即可全部补齐。
 
-**我的数据在哪里?**
-dsh 自身的数据在 `~/.dsh/`(上游默认);本项目的运行时在 `~/.local/opt/dsh-termux-runtime/`。
+**我的数据在哪里?** dsh 自身的数据在 `~/.dsh/`(上游默认);本项目的运行时在 `~/.local/opt/dsh-termux-runtime/`。
 
 ## 贡献者指南
 
@@ -102,7 +111,7 @@ dsh 自身的数据在 `~/.dsh/`(上游默认);本项目的运行时在 `~/.loca
 
 ## 项目结构
 
-```
+```text
 dsh-termux/
 ├─ patches/                  Android 补丁(作用于 dsh 的 npm 编译产物)
 ├─ scripts/                  安装/更新流水线(在 Termux 上运行)
