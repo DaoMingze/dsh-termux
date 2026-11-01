@@ -20,13 +20,16 @@
 set -uo pipefail
 
 TI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-[ -f build/install.sh ] || { echo "请在仓库根目录运行 (build/install.sh 不存在)" >&2; exit 1; }
+[ -f build/install.sh ] || {
+	echo "请在仓库根目录运行 (build/install.sh 不存在)" >&2
+	exit 1
+}
 # 复用公共库的 resolve_release_tag / fetch_release_assets (下载逻辑唯一实现)
 # shellcheck source=sandbox-lib.sh
 . "$TI/sandbox-lib.sh"
 
 usage_text() {
-  cat <<'EOF'
+	cat <<'EOF'
 用法: bash .test-install/run.sh <命令>
 
 测试路线:
@@ -63,179 +66,210 @@ usage_text() {
 网络受限时先 export https_proxy/http_proxy。测试协议细节见 AGENTS.md §1。
 EOF
 }
-usage() { usage_text >&2; exit 2; }   # 无参: 每个调用点都是"用法错误"路径
+usage() {
+	usage_text >&2
+	exit 2
+} # 无参: 每个调用点都是"用法错误"路径
 
 # --- baseline 管理 ----------------------------------------------------------
 # tag 形如 dsh-<dsh版本>-<项目VERSION>。写盘前原子替换；哈希一律现算，绝不手抄。
 baseline_write() { # $1=tag $2=tarball_sha $3=installer_sha $4=dsh_version
-  local tmp="$TI/baseline.env.tmp"
-  {
-    echo "# 本文件是基线发布物的唯一事实源。所有测试由此派生期望值。"
-    echo "# 更新方式: bash .test-install/run.sh baseline set <release-tag>"
-    echo "#           (会下载两个资产、现算 sha256、原子写入; 不要手编本文件)"
-    echo "BASELINE_TAG=$1"
-    echo "TARBALL_SHA256=$2"
-    echo "INSTALLER_SHA256=$3"
-    echo "BASELINE_DSH_VERSION=$4"
-  } > "$tmp"
-  mv -f "$tmp" "$TI/baseline.env"
-  echo "==> baseline.env 已写入: tag=$1 dsh=$4"
+	local tmp="$TI/baseline.env.tmp"
+	{
+		echo "# 本文件是基线发布物的唯一事实源。所有测试由此派生期望值。"
+		echo "# 更新方式: bash .test-install/run.sh baseline set <release-tag>"
+		echo "#           (会下载两个资产、现算 sha256、原子写入; 不要手编本文件)"
+		echo "BASELINE_TAG=$1"
+		echo "TARBALL_SHA256=$2"
+		echo "INSTALLER_SHA256=$3"
+		echo "BASELINE_DSH_VERSION=$4"
+	} >"$tmp"
+	mv -f "$tmp" "$TI/baseline.env"
+	echo "==> baseline.env 已写入: tag=$1 dsh=$4"
 }
 
 baseline_dsh_ver() { # dsh-<dsh版本>-<项目版本> -> 剥掉首尾得到中间段
-  # 两个 local 分开写: bash 在执行 local 前就把整行的赋值词展开完了, 写成
-  # `local tag="$1" pv="${tag##*-}"` 时 pv 取的是**调用者作用域**里的 tag,
-  # 而不是刚赋的这个。今天恰好只被 baseline_set 调用、而它的局部 tag 同值,
-  # 才一直看着是对的; 换个调用点就会静默算错 (shellcheck SC2318)。
-  local tag="$1"
-  local pv="${tag##*-}"
-  echo "${tag#dsh-}" | sed "s/-$pv\$//"
+	# 两个 local 分开写: bash 在执行 local 前就把整行的赋值词展开完了, 写成
+	# `local tag="$1" pv="${tag##*-}"` 时 pv 取的是**调用者作用域**里的 tag,
+	# 而不是刚赋的这个。今天恰好只被 baseline_set 调用、而它的局部 tag 同值,
+	# 才一直看着是对的; 换个调用点就会静默算错 (shellcheck SC2318)。
+	local tag="$1"
+	local pv="${tag##*-}"
+	echo "${tag#dsh-}" | sed "s/-$pv\$//"
 }
 
 baseline_check() { # 只报告不改状态; 资产缺失/漂移时 exit 1 (可脚本化判定)
-  local rc=0 cur f want got
-  if [ ! -f "$TI/baseline.env" ]; then
-    echo "MISSING: baseline.env 不存在 — 生成: run.sh baseline set <tag|latest> (联网)"
-    return 1
-  fi
-  # shellcheck disable=SC1091
-  . "$TI/baseline.env"
-  echo "BASELINE_TAG=$BASELINE_TAG  BASELINE_DSH_VERSION=$BASELINE_DSH_VERSION"
-  cur="$(tr -d "[:space:]" < "$TI/../VERSION" 2>/dev/null || true)"
-  if [ "${BASELINE_TAG##*-}" != "$cur" ]; then
-    echo "DRIFT: 基线(${BASELINE_TAG##*-}) != VERSION($cur) — 发版后请跑: run.sh baseline set <新tag>"
-  else
-    echo "CONSISTENT: 基线 == VERSION ($cur)"
-  fi
-  for f in "dsh-termux-runtime.tar.gz:$TARBALL_SHA256" "install.sh:$INSTALLER_SHA256"; do
-    want="${f#*:}"; name="${f%%:*}"
-    got="$(sha256sum "$TI/release-test/$name" 2>/dev/null | cut -d" " -f1)" || true
-    if [ "$got" = "$want" ]; then echo "ASSET-OK: $name"
-    elif [ -z "$got" ]; then echo "ASSET-MISSING: release-test/$name"; rc=1
-    else echo "ASSET-CHANGED: $name (现算=${got:0:12}… pin=$want) — 若是有意更换请 baseline set <tag|latest> 重 pin"; rc=1; fi
-  done
-  return "$rc"
+	local rc=0 cur f want got
+	if [ ! -f "$TI/baseline.env" ]; then
+		echo "MISSING: baseline.env 不存在 — 生成: run.sh baseline set <tag|latest> (联网)"
+		return 1
+	fi
+	# shellcheck disable=SC1091
+	. "$TI/baseline.env"
+	echo "BASELINE_TAG=$BASELINE_TAG  BASELINE_DSH_VERSION=$BASELINE_DSH_VERSION"
+	cur="$(tr -d "[:space:]" <"$TI/../VERSION" 2>/dev/null || true)"
+	# VERSION 文件已派生化退役: 没有它不算漂移, 版本由 release tag 携带。
+	if [ -z "$cur" ]; then
+		echo "NOTE: 仓库无 VERSION 文件 (已派生化, 版本由 release tag 携带); 基线项目版本段=${BASELINE_TAG##*-}"
+	elif [ "${BASELINE_TAG##*-}" != "$cur" ]; then
+		echo "DRIFT: 基线(${BASELINE_TAG##*-}) != VERSION($cur) — 发版后请跑: run.sh baseline set <新tag>"
+	else
+		echo "CONSISTENT: 基线 == VERSION ($cur)"
+	fi
+	for f in "dsh-termux-runtime.tar.gz:$TARBALL_SHA256" "install.sh:$INSTALLER_SHA256"; do
+		want="${f#*:}"
+		name="${f%%:*}"
+		got="$(sha256sum "$TI/release-test/$name" 2>/dev/null | cut -d" " -f1)" || true
+		if [ "$got" = "$want" ]; then
+			echo "ASSET-OK: $name"
+		elif [ -z "$got" ]; then
+			echo "ASSET-MISSING: release-test/$name"
+			rc=1
+		else
+			echo "ASSET-CHANGED: $name (现算=${got:0:12}… pin=$want) — 若是有意更换请 baseline set <tag|latest> 重 pin"
+			rc=1
+		fi
+	done
+	return "$rc"
 }
 
 baseline_set() { # $1 = 新 release tag 或 'latest': 联网下载两资产 -> 现算哈希 -> 重 pin
-  local pv
-  local tag
-  tag="$(resolve_release_tag "${1:-latest}")" || exit 1
-  # 基线是**稳定发布物**的 pin: r1 拿它当种子、r2 --pinned 拿它当离线期望值,
-  # 两者都要求可复现。pre 渠道产物是 prerelease, 按 GitHub 的定义 latest 永远
-  # 解析不到它——但显式传 tag 可以绕过来, 所以这道拒绝写在这里而不是解析器里:
-  # 「认证 pre 产物」是 r2 --tag 的活, 「当基线」不是。
-  case "$tag" in
-    pre-*)
-      echo "!! 基线只 pin 稳定发布物, 而 $tag 是 pre 渠道产物 (prerelease)。" >&2
-      echo "   要认证这个 pre 产物, 用: bash .test-install/run.sh r2 --tag $tag" >&2
-      exit 1 ;;
-  esac
-  [ "$tag" != "${1:-}" ] && echo "    latest -> $tag"
-  pv="${tag##*-}"
-  echo "==> 下载 $tag 的两个发布物到 release-test/ …"
-  fetch_release_assets "$TI/release-test" "$tag" || exit 1
-  baseline_write "$tag" \
-    "$(sha256sum "$TI/release-test/dsh-termux-runtime.tar.gz" | cut -d" " -f1)" \
-    "$(sha256sum "$TI/release-test/install.sh" | cut -d" " -f1)" \
-    "$(baseline_dsh_ver "$tag")"
-  if [ "$pv" != "$(tr -d "[:space:]" < VERSION 2>/dev/null || true)" ]; then
-    echo "note: tag 项目版本段($pv) != 仓库 VERSION($(tr -d "[:space:]" < VERSION)); 基线按发布物为准 pin住了"
-  fi
-  bash "$TI/run.sh" baseline check
+	local pv
+	local tag
+	tag="$(resolve_release_tag "${1:-latest}")" || exit 1
+	# 基线是**稳定发布物**的 pin: r1 拿它当种子、r2 --pinned 拿它当离线期望值,
+	# 两者都要求可复现。pre 渠道产物是 prerelease, 按 GitHub 的定义 latest 永远
+	# 解析不到它——但显式传 tag 可以绕过来, 所以这道拒绝写在这里而不是解析器里:
+	# 「认证 pre 产物」是 r2 --tag 的活, 「当基线」不是。
+	case "$tag" in
+	pre-*)
+		echo "!! 基线只 pin 稳定发布物, 而 $tag 是 pre 渠道产物 (prerelease)。" >&2
+		echo "   要认证这个 pre 产物, 用: bash .test-install/run.sh r2 --tag $tag" >&2
+		exit 1
+		;;
+	esac
+	[ "$tag" != "${1:-}" ] && echo "    latest -> $tag"
+	pv="${tag##*-}"
+	echo "==> 下载 $tag 的两个发布物到 release-test/ …"
+	fetch_release_assets "$TI/release-test" "$tag" || exit 1
+	baseline_write "$tag" \
+		"$(sha256sum "$TI/release-test/dsh-termux-runtime.tar.gz" | cut -d" " -f1)" \
+		"$(sha256sum "$TI/release-test/install.sh" | cut -d" " -f1)" \
+		"$(baseline_dsh_ver "$tag")"
+	repo_v="$(tr -d "[:space:]" <VERSION 2>/dev/null || true)"
+	if [ -n "$repo_v" ] && [ "$pv" != "$repo_v" ]; then
+		echo "note: tag 项目版本段($pv) != 仓库 VERSION($repo_v); 基线按发布物为准 pin住了"
+	fi
+	bash "$TI/run.sh" baseline check
 }
 
 # --- 路由调度 ----------------------------------------------------------------
 # 测试体系身份: 仓库短 SHA + 工作树是否脏。派生自 git, 不手维护——测试代码与
 # 仓库同车版本化, 结果归因靠这个 (而不是另立"测试体系版本号")。
 harness_identity() {
-  local sha
-  sha="$(git -C "$TI/.." rev-parse --short HEAD 2>/dev/null || echo unknown)"
-  if ! git -C "$TI/.." diff --quiet 2>/dev/null \
-     || ! git -C "$TI/.." diff --cached --quiet 2>/dev/null; then
-    sha="$sha-dirty"
-  fi
-  printf 'harness @%s\n' "$sha"
+	local sha
+	sha="$(git -C "$TI/.." rev-parse --short HEAD 2>/dev/null || echo unknown)"
+	if ! git -C "$TI/.." diff --quiet 2>/dev/null ||
+		! git -C "$TI/.." diff --cached --quiet 2>/dev/null; then
+		sha="$sha-dirty"
+	fi
+	printf 'harness @%s\n' "$sha"
 }
 
 # 路由 id -> 文件名 (描述性文件名, 短 id 是对外接口)
 route_file() {
-  case "$1" in
-    r1) echo r1-install.sh ;;
-    r2) echo r2-release.sh ;;
-    r3) echo r3-setup.sh ;;
-    r4) echo r4-update-ws.sh ;;
-    r5) echo r5-update-shipped.sh ;;
-    r6) echo r6-self-workspace.sh ;;
-    *) return 1 ;;
-  esac
+	case "$1" in
+	r1) echo r1-install.sh ;;
+	r2) echo r2-release.sh ;;
+	r3) echo r3-setup.sh ;;
+	r4) echo r4-update-ws.sh ;;
+	r5) echo r5-update-shipped.sh ;;
+	r6) echo r6-self-workspace.sh ;;
+	*) return 1 ;;
+	esac
 }
 
 route_run() {
-  local r="$1"; shift
-  local file; file="$(route_file "$r")" || { echo "!! 未知路由: $r" >&2; return 2; }
-  local t0=$SECONDS rc
-  echo
-  echo "##################### ROUTE $r #####################"
-  harness_identity
-  bash "$TI/routes/$file" "$@"
-  rc=$?
-  echo "[route $r] exit=$rc 耗时=$((SECONDS-t0))s"
-  return "$rc"
+	local r="$1"
+	shift
+	local file
+	file="$(route_file "$r")" || {
+		echo "!! 未知路由: $r" >&2
+		return 2
+	}
+	local t0=$SECONDS rc
+	echo
+	echo "##################### ROUTE $r #####################"
+	harness_identity
+	bash "$TI/routes/$file" "$@"
+	rc=$?
+	echo "[route $r] exit=$rc 耗时=$((SECONDS - t0))s"
+	return "$rc"
 }
 
 do_clean() {
-  local p sz
-  for p in "$TI"/sandbox-*; do
-    [ -d "$p" ] || continue
-    sz="$(du -sh "$p" 2>/dev/null | cut -f1)"
-    rm -rf "$p"
-    echo "已删除 $(basename "$p")/ ($sz)"
-  done
-  # 残留扫描必须能看到点开头文件 ("$TI"/* 不匹配它们): sandbox_init 的 flock
-  # sidecar (.sandbox-*.lock) 就落在这里, 未来任何隐藏垃圾也不该对扫描隐身。
-  # 锁文件只白名单、不删除——若并发路线正持有该锁, 删文件会让下一个开锁者
-  # 锁到新建的同名文件上, r4/r5 的互斥就被静默破坏了 (审计 2026-08-30)。
-  # audits/ 与 upstream/ 是有意留档的历史数据 (报告快照/上游讨论材料), 同样豁免。
-  for p in "$TI"/* "$TI"/.[!.]*; do
-    case "${p##*/}" in
-      # sandbox-* 已同时覆盖沙箱目录与 sandbox-lib.sh, 故不再单列后者——被前
-      # 者遮蔽的分支永远不会命中 (shellcheck SC2221/SC2222)。
-      release-test|routes|tools|sandbox-*|run.sh|serve.sh|baseline.env|README.md|audits|upstream|.sandbox-*.lock) continue ;;
-    esac
-    [ -e "$p" ] || continue
-    echo "note: 发现非白名单残留: $(basename "$p") (确认无用可手动删)"
-  done
-  echo "==> 清理完成 (保留 baseline.env / README.md / audits/ / upstream/ / release-test/ / routes/ / tools/ / .sandbox-*.lock / 库与入口)"
+	local p sz
+	for p in "$TI"/sandbox-*; do
+		[ -d "$p" ] || continue
+		sz="$(du -sh "$p" 2>/dev/null | cut -f1)"
+		rm -rf "$p"
+		echo "已删除 $(basename "$p")/ ($sz)"
+	done
+	# 残留扫描必须能看到点开头文件 ("$TI"/* 不匹配它们): sandbox_init 的 flock
+	# sidecar (.sandbox-*.lock) 就落在这里, 未来任何隐藏垃圾也不该对扫描隐身。
+	# 锁文件只白名单、不删除——若并发路线正持有该锁, 删文件会让下一个开锁者
+	# 锁到新建的同名文件上, r4/r5 的互斥就被静默破坏了 (审计 2026-08-30)。
+	# audits/ 与 upstream/ 是有意留档的历史数据 (报告快照/上游讨论材料), 同样豁免。
+	for p in "$TI"/* "$TI"/.[!.]*; do
+		case "${p##*/}" in
+		# sandbox-* 已同时覆盖沙箱目录与 sandbox-lib.sh, 故不再单列后者——被前
+		# 者遮蔽的分支永远不会命中 (shellcheck SC2221/SC2222)。
+		release-test | routes | tools | sandbox-* | run.sh | serve.sh | baseline.env | README.md | audits | upstream | .sandbox-*.lock) continue ;;
+		esac
+		[ -e "$p" ] || continue
+		echo "note: 发现非白名单残留: $(basename "$p") (确认无用可手动删)"
+	done
+	echo "==> 清理完成 (保留 baseline.env / README.md / audits/ / upstream/ / release-test/ / routes/ / tools/ / .sandbox-*.lock / 库与入口)"
 }
 
 main() {
-  local cmd="${1:-}"; [ $# -gt 0 ] && shift
-  case "$cmd" in
-    r1|r2|r4|r5|r6) route_run "$cmd" "$@" ;;
-    r3)
-      echo "提醒: r3 冷装 npm 全量解析约 20min+(依赖图属性, 属正常耗时, 别当挂死);"
-      route_run r3 "$@" ;;
-    all)
-      local routes="r1 r2 r4 r5 r6"
-      case " $* " in *" --with-r3 "*) routes="$routes r3" ;; esac
-      local r rc
-      for r in $routes; do
-        route_run "$r" || { echo "!! all 在 $r 处失败, 后续路线未执行" >&2; exit 1; }
-      done
-      echo
-      echo "ALL ROUTES PASSED ($routes)" ;;
-    serve) exec bash "$TI/serve.sh" "$@" ;;
-    clean) do_clean ;;
-    help|-h|--help) usage_text ;;
-    baseline)
-      case "${1:-}" in
-        check) baseline_check ;;
-        set) shift; [ -n "${1:-}" ] || usage; baseline_set "$1" ;;
-        *) usage ;;
-      esac ;;
-    *) usage ;;
-  esac
+	local cmd="${1:-}"
+	[ $# -gt 0 ] && shift
+	case "$cmd" in
+	r1 | r2 | r4 | r5 | r6) route_run "$cmd" "$@" ;;
+	r3)
+		echo "提醒: r3 冷装 npm 全量解析约 20min+(依赖图属性, 属正常耗时, 别当挂死);"
+		route_run r3 "$@"
+		;;
+	all)
+		local routes="r1 r2 r4 r5 r6"
+		case " $* " in *" --with-r3 "*) routes="$routes r3" ;; esac
+		local r rc
+		for r in $routes; do
+			route_run "$r" || {
+				echo "!! all 在 $r 处失败, 后续路线未执行" >&2
+				exit 1
+			}
+		done
+		echo
+		echo "ALL ROUTES PASSED ($routes)"
+		;;
+	serve) exec bash "$TI/serve.sh" "$@" ;;
+	clean) do_clean ;;
+	help | -h | --help) usage_text ;;
+	baseline)
+		case "${1:-}" in
+		check) baseline_check ;;
+		set)
+			shift
+			[ -n "${1:-}" ] || usage
+			baseline_set "$1"
+			;;
+		*) usage ;;
+		esac
+		;;
+	*) usage ;;
+	esac
 }
 
 main "$@"

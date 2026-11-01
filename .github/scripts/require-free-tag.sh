@@ -13,12 +13,12 @@ set -euo pipefail
 tag="${1:?用法: require-free-tag.sh <tag>}"
 
 if ! [[ "$tag" =~ ^[A-Za-z0-9._-]+$ ]]; then
-  echo "::error::Invalid tag '$tag': only letters, digits, '.', '_' and '-' are" >&2
-  echo "   allowed (it becomes both a git ref and an asset path)." >&2
-  exit 1
+	echo "::error::Invalid tag '$tag': only letters, digits, '.', '_' and '-' are" >&2
+	echo "   allowed (it becomes both a git ref and an asset path)." >&2
+	exit 1
 fi
 
 if git ls-remote --tags origin "refs/tags/${tag}" 2>/dev/null | grep -q .; then
-  echo "::error::Tag $tag already exists. Bump VERSION (or pick another tag) instead of reusing it." >&2
-  exit 1
+	echo "::error::Tag $tag already exists. Pick a NEW tag (dsh-<bundled dsh version>-<new project version>) instead of reusing it." >&2
+	exit 1
 fi

@@ -18,7 +18,7 @@
 |[pnpm](https://www.npmjs.com/package/pnpm)|![pnpm stable](https://img.shields.io/npm/v/pnpm?label=pnpm)|![pnpm pre](https://img.shields.io/npm/v/pnpm/next-12?label=pnpm%20pre)|
 |[dsh](https://www.npmjs.com/package/@deepseek-ai/dsh)|![dsh stable](https://img.shields.io/npm/v/%40deepseek-ai/dsh?label=dsh)|![dsh pre](https://img.shields.io/npm/v/%40deepseek-ai/dsh/alpha?label=dsh%20pre)|
 
-说明:dsh 的 `next` 标签当前与 `latest` 指向同一构建,所以预发布列改用 `alpha` 标签——即最新发布的开发线。本项目钉住 Node 24(见 [NODE_VERSION](NODE_VERSION));上表 Node.js 徽章跟踪的是上游,不是本项目的钉定值。
+说明:dsh 的 `next` 标签当前与 `latest` 指向同一构建,所以预发布列改用 `alpha` 标签——即最新发布的开发线。本项目跟随 Node **active LTS** 线([NODE_VERSION](NODE_VERSION) 写的是 `lts`,构建/安装时解析成具体版本);上表 Node.js 徽章跟踪的是上游,不是本项目的选择。
 
 ## 为什么这样做
 
@@ -41,12 +41,12 @@ curl -fsSL https://github.com/ErEbusE/dsh-termux/releases/latest/download/instal
 ### 方案B:克隆项目本地安装
 
 ```sh
-pkg install glibc-repo
-pkg install glibc glibc-runner
 git clone https://github.com/ErEbusE/dsh-termux.git
 cd dsh-termux
 bash scripts/00-setup.sh        # 加 -y 自动接受所有提示
 ```
+
+它的第一步自己装 pkg 前置(glibc-repo,再加 glibc + glibc-runner,以及 gnupg 与 patchelf),然后**从 release 运行时 tarball 里取 Node**(`DSH_RELEASE`,默认 `latest`)——与该 release 预构建原生件同一次构建,ABI 不会错配;要改用 nodejs.org 的构建就设 `DSH_NODE_VERSION=<lts|24|24.19.0>`。接着把 ELF interpreter 指向 Termux 的 loader,提示是否卸载 pkg 安装的 node 栈(`nodejs`/`nodejs-lts`/`npm`/`pnpm`),并注册 `node`/`npm`/`npx`(运行时自带 pnpm 时一并注册)。
 
 区别:方案B 在安装时从 npm 解析 dsh(即当时发布的最新版),方案A 使用发版时的快照。两者最终布局相同,都带同一个内置更新器。
 
@@ -58,7 +58,7 @@ pnpm --version   # 随运行时内置;`dsh plugin` 依赖它
 dsh web --port 3080
 ```
 
-`dsh web` 会打印 `http://127.0.0.1:3080` 并自动在手机浏览器中打开——启动时请让 Termux 保持**前台**(Android 10+ 会静默丢弃后台发起的 activity 启动);`dsh` 的行为与上游官方 CLI 完全一致,仅额外提供本项目添加的 `update` 命令(见[更新](#更新))。
+`dsh web` 会打印 `http://127.0.0.1:3080` 并自动在手机浏览器中打开——启动时请让 Termux 保持**前台**(Android 10+ 会静默丢弃后台发起的 activity 启动);`dsh` 的行为与上游官方 CLI 完全一致,仅额外提供本项目添加的 `update` 命令(见[更新](#更新))。要启动其它 profile:`bash scripts/04-launch.sh --profile headless`(启动器统一传 `--profile <name>`;`web` 是默认值,并保留 `--host`/`--port`)。
 
 ## 更新
 
@@ -119,8 +119,10 @@ dsh-termux/
 ├─ patches/                  Android 补丁(作用于 dsh 的 npm 编译产物)
 ├─ scripts/                  安装/更新流水线(在 Termux 上运行)
 │   ├─ 00-setup.sh           方案B 入口:环境配置,驱动 01→04
-│   ├─ 01-setup-glibc-node.sh   下载 Node 并把 ELF interpreter 指向 glibc
-│   ├─ 02-install-dsh.sh / 03-apply-patches.sh / 04-run-web.sh
+│   ├─ 01-setup-glibc-node.sh   pkg 前置、glibc Node、node/npm 注册
+│   ├─ 02-install-dsh.sh / 03-apply-patches.sh / 04-launch.sh
+│   │                        02 从 npm 装 dsh · 03 依赖体检 + 匹配补丁
+│   │                        · 04 生成 dsh 命令并启动指定 profile(默认 web)
 │   ├─ update-dsh.sh         更新器:版本切换 + 重打补丁 + 重写包装脚本
 │   └─ common.sh / patch-lib.sh  共享助手(包装脚本与 $BROWSER 打开器生成、
 │                                补丁登记表;CI 复用)
@@ -130,7 +132,7 @@ dsh-termux/
 ├─ .github/workflows/        CI:静态门槛(verify)+ npm 补丁哨兵(patch-check)
 │                            + 稳定发布 + 源码构建 pre 发布
 ├─ .test-install/            沙箱测试体系:六条路线 + serve.sh 人类点检
-├─ VERSION / NODE_VERSION    项目发布号(X.Y.Z;tag 为 dsh-<dsh 版本>-<VERSION>)/ 构建运行时使用的 Node 版本
+├─ VERSION / NODE_VERSION    项目发布号(X.Y.Z;tag 为 dsh-<dsh 版本>-<VERSION>)/ release **构建**用的 Node 规格(`lts` = active LTS 线;也接受裸大版本与精确版本)——设备侧通过 release tarball 继承
 ├─ README.md / README.zh-CN.md   用户文档:安装 / 更新 / 卸载
 ├─ PATCHES.md                全部修复与适配的唯一索引 + 补丁机制
 ├─ CONTRIBUTING.md           贡献者工作流:测试门槛、CI、发布

@@ -63,7 +63,7 @@
 |---|---|---|
 |R1 基础安装|`run.sh r1`|工作区 `build/install.sh` × 基线 tarball 解包+接线（每次迭代必跑）|
 |R2 发布物|`run.sh r2`|**下载 latest release** 认证 shipped install.sh + tarball 是否完好（`--pinned` 测 pin 资产；`--tag <tag>` 认证指定发布物，**pre 渠道产物的测试入口**——latest 按定义看不见 prerelease；基线仍只 pin 稳定版）|
-|R3 setup 管线|`run.sh r3`|工作区 `00-setup.sh` 01→02(npm 装 dsh)→03(补丁)→04 源码树安装方案（web 跳过）|
+|R3 setup 管线|`run.sh r3`|工作区 `00-setup.sh` 01(pkg 前置+glibc node+shim 注册)→01b(release tarball 取 node, 用基线资产、离线)→02(npm 装 dsh)→03(树体检+补丁)→04(wrapper+profile 启动)（web 跳过）|
 |R4 更新链路(工作区更新器)|`run.sh r4`|种子旧 runtime → 工作区 `scripts/update-dsh.sh -t <tag> -y` 的更新机制；第 8 步种入假旧 VERSION **强制走自动刷新分支**（判定落后→下载补丁集资产→re-exec→继续 npm 并完成，marker 按已安装注册表派生）|
 |R5 更新链路(tarball 内置更新器)|`run.sh r5`|种子=latest 下载的 runtime，执行其内置更新器+补丁——Option A 用户真实路径（打包缺件只有这里红；tarball 携带 VERSION 时加跑 --self 自更新链路）|
 |R6 更新链路(工作区更新器 --self)|`run.sh r6`|`--self` 新语义（刷新机件后**直接应用**补丁集，不碰 npm）：A 本地目录集（断言先退旧集+应用+marker+wrapper、无 npm 查询）／B 机件签名相同跳过／C `--force` 重打 + `-t/-v` 忽略提示／D 本地 tarball（`build/build-patchset.sh` 现打）消费／E 注册表缺件负例／F 哨兵缺失回退子 shell／G 下载 latest 资产路径／H 白盒哨兵（答 n 中止 NOTE 仅当补丁集真变化）|
@@ -72,7 +72,7 @@
 
 - **CI 分工（按「改动能破坏什么」分流，不是按提交类型分）**：
   - `.github/workflows/verify.yml` —— 每个 PR / push main 必跑、不联网装包、 目标 1 分钟内出结果：全部受跟踪 `*.sh` 的 `bash -n` + ShellCheck （门槛 `-S warning`；`-P SCRIPTDIR` 让 `# shellcheck source=` 指令可解析， 库里的变量与函数才被真正跟进去看。**注意版本偏差**：runner 自带 0.9.0、 Termux 是 0.11.0，两者发现集不同——本地绿不等于 CI 绿，**以 CI 为准**， 步骤里打印的 version 行就是用来一眼归因的）、`DSH_PATCH_SET` 与 `patches/` 的静态一致性、wrapper/opener 生成器、`install.sh` 委派守卫、 `update-dsh.sh` 帮助哨兵契约（`-h` 输出 == `# help-begin`/`# help-end` 之间的块）、`.test-install/run.sh` 入口与路线登记、 文档相对链接/锚点（`.github/scripts/check-doc-links.py`）；
-  - `.github/workflows/patch-check.yml` —— npm 装 dsh → 套补丁 → 校验 marker → 回归守卫 → boot smoke（~16min，其中 npm 占 98%）。触发点是**它真正能派上 用场的时刻**：`patches/`、`scripts/patch-lib.sh`、`NODE_VERSION` 变化时； **PR 改了 `VERSION` 时**（按 §6.6 那就是即将触发发版的那个 PR，也正是 「补丁过时会被烤进发布物」的时刻）；以及手动 dispatch。 **没有 cron**：定时轮询无论上游动没动都要占一条运行记录，而它防的失败很轻—— `update-dsh.sh` 与 `00-setup.sh` 在补丁打不上时都会响亮停下，没人会拿到坏 安装，维护者只是「下次更新时才知道」而不是「第二天早上就知道」；
+  - `.github/workflows/patch-check.yml` —— npm 装 dsh → 套补丁 → 校验 marker → 回归守卫 → boot smoke（~16min，其中 npm 占 98%）。触发点是**它真正能派上 用场的时刻**：`patches/`、`scripts/patch-lib.sh`、`NODE_VERSION` 变化时；以及手动 dispatch（发版已改为手动 dispatch + 显式 tag，发版前后跑一次正是「补丁过时会被烤进发布物」的时刻）。 **没有 cron**：定时轮询无论上游动没动都要占一条运行记录，而它防的失败很轻—— `update-dsh.sh` 与 `00-setup.sh` 在补丁打不上时都会响亮停下，没人会拿到坏 安装，维护者只是「下次更新时才知道」而不是「第二天早上就知道」；
   - `.github/workflows/pre-release.yml` —— **pre 渠道，只手动触发**：从上游 `deepseek-ai/deepseek-harness` 的**源码**构建并发 prerelease（走 `build-runtime.sh` 的 `DSH_SOURCE_TREE` 分支；实测 ~4.5min，比 npm 路径的 ~16min 还快，且能构建 npm 从未发布的 ref）。**刻意不加 cron**：Actions 无法 订阅别的仓库的事件，「跟随上游」只能是轮询，而轮询无论有没有事发生都要占一 条运行记录——6 小时一次 ≈ 120 条/月、其中约 87% 只是在记录「上游没发版」， 足以淹没整个列表（有同类项目前车之鉴）。不跟随的代价很轻：没有人会拿到坏 产物，只是晚一点知道。**人**可以订阅（上游 Watch → Custom → Releases，或 `releases.atom`），所以发现留给维护者，这个工作流只当构建按钮；上游节奏稳定 后可以先从「每月检查一次」开始考虑恢复自动化。 它**碰不到**稳定渠道：`releases/latest` 按定义排除 prerelease，且它不发
     `dsh-termux-patches.tar.gz`——`--self` 仍只从稳定版刷新；
   - main 已启用分支保护：required check = `static`（**不要**把 `patch-check` / `pre-release` 设为 required——路径或条件过滤的工作流不运行时会永久 pending）， `enforce_admins` 关闭以保留 §1/§6.4 的直推豁免；
@@ -110,4 +110,4 @@
    禁止的「拿自动测试冒充实测」； 合并动作本身用 `bash .test-install/tools/pr-merge.sh <PR号> "<范围>"`（默认 dry-run 只打印将写入的合并提交信息，`--yes` 才执行；它内部调 `tb.sh` 生成 trailer 写进 merge commit）——**手拼 trailer 视为流程错误**； 更多示例见 `.test-install/README.md`「合并留痕」）；
 4. 小文档直推仅限「PR 合并后的收尾修正」量级：**个别文件、数行以内**、 不触及任何代码行为，且**不触碰 `.test-install/` 内的代码文件**（其中的 注释/文案字符串随代码同 review）；跨文件的成体系文档修改（如 `b7c759c` 的全仓术语清扫）仍走分支+PR。前提：内容已在会话中经人类确认；无需 Tested-by（无可实测项）——先例 `1c9c869`、`2f35f26`；
 5. 提交信息用英文、conventional 前缀（refactor/fix/feat/docs/ci/housekeeping）；
-6. 发版 bump（`VERSION` 变更）随触发本次发版的 PR/分支同车（无需单独 PR）， 但必须**独立为一个只改 `VERSION` 一个文件的提交**，不与任何代码/文档改动 混入同一提交——revert、审计与 release 触发点因此各自干净（教训：PR #12 曾把 bump 混进 fix 提交）。
+6. 项目版本已**派生化**：仓库不再有 `VERSION` 文件，版本号由 release tag 携带 （`dsh-<dsh版本>-<项目版本>`），发版 = 手动 dispatch `release.yml` 并在 `tag` 输入里声明新版本——不存在「版本 bump 提交」了；消费方（release notes、 runtime/资产内的 `VERSION` 文件、测试层）一律从 tag 尾段派生（教训： `eaefe20` 曾删文件而未同步消费方，r6/release.yml 在 main 上断裂）。

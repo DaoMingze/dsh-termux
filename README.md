@@ -18,7 +18,7 @@ dist-tag (`next-12`). When either project ships a new major, bump the tag here. 
 |[pnpm](https://www.npmjs.com/package/pnpm)|![pnpm stable](https://img.shields.io/npm/v/pnpm?label=pnpm)|![pnpm pre](https://img.shields.io/npm/v/pnpm/next-12?label=pnpm%20pre)|
 |[dsh](https://www.npmjs.com/package/@deepseek-ai/dsh)|![dsh stable](https://img.shields.io/npm/v/%40deepseek-ai/dsh?label=dsh)|![dsh pre](https://img.shields.io/npm/v/%40deepseek-ai/dsh/alpha?label=dsh%20pre)|
 
-Note: dsh's `next` dist-tag currently points at the same build as `latest`, so the prerelease column shows the `alpha` tag — the freshest published line. This project pins Node 24 (see [NODE_VERSION](NODE_VERSION)); the Node.js badges above track upstream, not this pin.
+Note: dsh's `next` dist-tag currently points at the same build as `latest`, so the prerelease column shows the `alpha` tag — the freshest published line. This project follows the Node **active LTS** line (`lts` in [NODE_VERSION](NODE_VERSION), resolved to a concrete release at build/install time); the Node.js badges above track upstream, not this choice.
 
 ## Why this approach
 
@@ -42,12 +42,12 @@ The installer downloads the newest runtime release, unpacks it and wires up the 
 ### Option B: clone this repo and install locally
 
 ```sh
-pkg install glibc-repo
-pkg install glibc glibc-runner
 git clone https://github.com/ErEbusE/dsh-termux.git
 cd dsh-termux
 bash scripts/00-setup.sh        # add -y to auto-accept every prompt
 ```
+
+Its first step installs the pkg prerequisites itself (glibc-repo, then glibc + glibc-runner, plus gnupg and patchelf), then takes the **Node out of a release runtime tarball** (`DSH_RELEASE`, default `latest`) — the same build that release shipped its prebuilt native addons with, so the ABI cannot drift; `DSH_NODE_VERSION=<lts|24|24.19.0>` fetches that build from nodejs.org instead. It then points Node's ELF interpreter at Termux's loader, offers to remove a pkg-installed node stack (`nodejs`/`nodejs-lts`/`npm`/`pnpm`), and registers `node`/`npm`/`npx` (+`pnpm` when the runtime bundles it).
 
 Option B resolves dsh from npm at install time (whatever is published right then); Option A ships the release-time snapshot. Both end up with the same layout and the same bundled updater.
 
@@ -59,7 +59,7 @@ pnpm --version   # bundled in the runtime; required by `dsh plugin`
 dsh web --port 3080
 ```
 
-`dsh web` prints `http://127.0.0.1:3080` and opens it in your phone's browser — keep Termux in the **foreground** while starting it (Android 10+ silently drops background activity launches); the `dsh` command behaves exactly like the official upstream CLI, plus the `update` command added by this project (see [Updating](#updating)).
+`dsh web` prints `http://127.0.0.1:3080` and opens it in your phone's browser — keep Termux in the **foreground** while starting it (Android 10+ silently drops background activity launches); the `dsh` command behaves exactly like the official upstream CLI, plus the `update` command added by this project (see [Updating](#updating)). For any other profile, `bash scripts/04-launch.sh --profile headless` (the launcher passes `--profile <name>`; `web` is the default and keeps `--host`/`--port`).
 
 ## Updating
 
@@ -120,8 +120,10 @@ dsh-termux/
 ├─ patches/                  Android patches (over dsh's compiled npm lib files)
 ├─ scripts/                  install/update pipeline (runs on Termux)
 │   ├─ 00-setup.sh           Option B entry: env config, drives 01→04
-│   ├─ 01-setup-glibc-node.sh   fetch Node, point its ELF interpreter at glibc
-│   ├─ 02-install-dsh.sh / 03-apply-patches.sh / 04-run-web.sh
+│   ├─ 01-setup-glibc-node.sh   pkg prerequisites, glibc Node, node/npm shims
+│   ├─ 02-install-dsh.sh / 03-apply-patches.sh / 04-launch.sh
+│   │                        02 dsh from npm · 03 tree check + matching patches
+│   │                        · 04 the `dsh` command + launch a profile (web)
 │   ├─ update-dsh.sh         updater: version switch + re-patch + wrapper rewrite
 │   └─ common.sh / patch-lib.sh  shared helpers (wrapper & $BROWSER generators,
 │                                patch registry; reused by CI)
@@ -131,7 +133,7 @@ dsh-termux/
 ├─ .github/workflows/        CI: static gate (verify) + npm patch canary (patch-check)
 │                            + stable releases + source-built pre-releases
 ├─ .test-install/            sandboxed test harness: six routes + serve.sh checklist
-├─ VERSION / NODE_VERSION    project release number (X.Y.Z; tags are dsh-<dsh>-<VERSION>) / Node version the runtime is built with
+├─ VERSION / NODE_VERSION    project release number (X.Y.Z; tags are dsh-<dsh>-<VERSION>) / Node spec a release is BUILT with (`lts` = active LTS line; a bare major or an exact X.Y.Z also work) — devices inherit it through the release tarball
 ├─ README.md / README.zh-CN.md   user docs: install / update / uninstall
 ├─ PATCHES.md                single index of all fixes & adaptations + patch mechanics
 ├─ CONTRIBUTING.md           contributor workflow: testing gates, CI, releases

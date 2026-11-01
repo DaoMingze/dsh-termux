@@ -62,8 +62,23 @@ jobs:
         run: |
           set -euo pipefail
           echo "dsh_spec=${INPUT_DSH_VERSION:-${RELEASE_SPEC_DEFAULT:-@deepseek-ai/dsh@latest}}" >> "$GITHUB_OUTPUT"
-          echo "node_version=${INPUT_NODE_VERSION:-$(tr -d '[:space:]' < NODE_VERSION)}" >> "$GITHUB_OUTPUT"
-          echo "project_version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+          # NODE_VERSION may be the repo default "lts"; resolve it with the same
+          # resolver the device scripts use, so the build input and the release
+          # notes both carry a concrete version instead of a moving keyword.
+          node_spec="${INPUT_NODE_VERSION:-$(tr -d '[:space:]' < NODE_VERSION)}"
+          node_version="$( source scripts/common.sh; resolve_node_version "$node_spec" )" \
+            || { echo "!! cannot resolve the Node version from '$node_spec'" >&2; exit 1; }
+          [ -n "$node_version" ] || { echo "!! resolved Node version is empty" >&2; exit 1; }
+          echo "node_version=${node_version}" >> "$GITHUB_OUTPUT"
+          # Project VERSION is DERIVED, not a repo file (the VERSION file was
+          # retired): an explicit dispatch tag is now the version declaration,
+          # and its trailing segment IS the project version (dsh-<dsh>-<PV>).
+          # A repo VERSION file still wins as a legacy fallback if present.
+          if [ -n "$INPUT_TAG" ]; then
+            echo "project_version=${INPUT_TAG##*-}" >> "$GITHUB_OUTPUT"
+          else
+            echo "project_version=$(tr -d '[:space:]' < VERSION 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          fi
 
       # Cheap gate before the ~16-minute build. A push releases only when the
       # project VERSION changed since the latest published release; upstream
@@ -78,7 +93,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="$(tr -d '[:space:]' < VERSION)"
+          VERSION="${{ steps.resolve.outputs.project_version }}"
           SPEC="${{ steps.resolve.outputs.dsh_spec }}"
           RESOLVED="$(python3 - "$SPEC" <<'PYEOF'
           import json, sys, urllib.request, urllib.parse
@@ -113,8 +128,16 @@ jobs:
           LAST_VER="${LAST_TAG##*-}"
           LAST_DSH="${LAST_TAG#dsh-}"; LAST_DSH="${LAST_DSH%-$LAST_VER}"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "::notice::Manual dispatch; proceeding (VERSION $VERSION, latest release $LAST_TAG)."
+            if [ -z "$VERSION" ]; then
+              echo "::error::No version declaration: fill the 'tag' input (dsh-<bundled dsh version>-<new project version>), or restore a repo VERSION file."
+              exit 1
+            fi
+            echo "::notice::Manual dispatch; proceeding (project version $VERSION, latest release $LAST_TAG)."
             echo "changed=1" >> "$GITHUB_OUTPUT"
+          elif [ -z "$VERSION" ]; then
+            echo "::notice::No version declaration on push (the repo VERSION file is retired; the project version now rides on the release tag). Skipping."
+            echo "::notice::To release, dispatch this workflow manually and fill the 'tag' input."
+            echo "changed=0" >> "$GITHUB_OUTPUT"
           elif [ "$VERSION" = "$LAST_VER" ]; then
             echo "::notice::VERSION $VERSION is already released as $LAST_TAG; skipping (a push releases only on a VERSION change)."
             echo "::notice::To release anyway (e.g. upstream dsh moved), dispatch this workflow manually."
@@ -192,7 +215,7 @@ jobs:
         run: |
           set -euo pipefail
           DSH="${{ steps.dshver.outputs.dsh_resolved }}"
-          PV="$(tr -d '[:space:]' < VERSION)"
+          PV="${{ steps.resolve.outputs.project_version }}"
           if [ -n "$INPUT_TAG" ]; then
             TAG="$INPUT_TAG"
             echo "Tag from dispatch override: $TAG"
@@ -258,7 +281,9 @@ jobs:
           # The runtime's own project version: the bundled updater compares it
           # with the latest release to warn when the shipped PATCH SET is
           # outdated (new patches ship in new project releases, not via npm).
-          cp VERSION "$RT/VERSION"
+          # Derived (see the resolve step): the dispatch tag's trailing
+          # segment, not a repo VERSION file.
+          printf '%s\n' "${{ steps.resolve.outputs.project_version }}" > "$RT/VERSION"
           # Fixed asset name so /releases/latest/download/<name> works for the
           # curl|bash install path.
           ARCHIVE="dsh-termux-runtime.tar.gz"

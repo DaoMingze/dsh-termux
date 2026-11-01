@@ -39,25 +39,24 @@ The repo's iron rule (AGENTS.md §0): **agent-run tests are necessary but never 
 | Workflow | When it runs | What it does |
 |---|---|---|
 | `verify.yml` | every PR / push to main, no npm install, <1 min | `bash -n` + ShellCheck over all tracked `*.sh`, patch-registry integrity, wrapper/`$BROWSER` generator tests, `install.sh` delegation guard, updater help-sentinel contract, test-harness entry/route registration, doc links/anchors (`.github/scripts/check-doc-links.py`) |
-| `patch-check.yml` | when `patches/`, `scripts/patch-lib.sh` or `NODE_VERSION` change; when a PR touches `VERSION`; manual dispatch | installs dsh from npm, applies the patch set, checks markers, regression guards, boot smoke (~16 min, mostly npm) |
-| `release.yml` | automatically when a `VERSION` change lands on main; also manual | builds and publishes the release; a push exits early unless `VERSION` changed (a manual dispatch always proceeds), fails if the tag exists |
+| `patch-check.yml` | when `patches/`, `scripts/patch-lib.sh` or `NODE_VERSION` change; manual dispatch | installs dsh from npm, applies the patch set, checks markers, regression guards, boot smoke (~16 min, mostly npm) |
+| `release.yml` | manual dispatch (a push to main no longer releases) | builds and publishes the release; the dispatch's `tag` input is the version declaration (`dsh-<bundled dsh version>-<project version>`), fails if the tag exists |
 | `pre-release.yml` | manual only | builds from the upstream dsh **source tree** and publishes a prerelease (pre channel); never touches `releases/latest` or the patch-set asset, so `--self` stays stable-channel-only |
 
 `main` branch protection requires only the `static` check; `patch-check`/`pre-release` deliberately have no cron (see AGENTS.md §4 for why).
 
 ## Releases and versioning
 
-- The project version lives in `VERSION` (X.Y.Z); release tags are `dsh-<bundled dsh version>-<VERSION>`.
-- A release publishes automatically when a version change is pushed to main; separately, when only upstream dsh moved, the author manually triggers a release so fresh Option A installs get the newest dsh.
-- The dsh spec a release bundles defaults to the `DSH_RELEASE_SPEC` repository variable when set, else `@deepseek-ai/dsh@latest`; a manual dispatch's `dsh_version` input overrides both. Pin it before a push-triggered release that must bundle a specific version: `gh variable set DSH_RELEASE_SPEC --body '@deepseek-ai/dsh@0.1.5-alpha.1'`.
-- A `VERSION` bump must be its **own single-file commit**, riding on the PR/branch that triggered it (AGENTS.md §6.6).
+- The project version is DERIVED, not stored: a release tag `dsh-<bundled dsh version>-<VERSION>` carries it, and every consumer (release notes, the runtime's `VERSION` file, the patch-set asset, the test harness) derives it from a tag's trailing segment.
+- Releases are manual: dispatch `release.yml` with the `tag` input (`dsh-<bundled dsh version>-<new project version>`). A push to main no longer releases. To bundle a specific dsh version, set the `DSH_RELEASE_SPEC` repository variable or pass the `dsh_version` input: `gh variable set DSH_RELEASE_SPEC --body '@deepseek-ai/dsh@0.1.5-alpha.1'`.
+- Pick a project version **when dispatching the release** (it lives in the tag, nowhere else) — there is no version-bump commit to keep separate anymore (AGENTS.md §6.6).
 - After each release, re-pin the test baseline: `bash .test-install/run.sh baseline set <tag|latest>` — never hand-edit `baseline.env`.
 
 ## Working conventions
 
 - Commit messages: English, conventional prefixes (feat / fix / refactor / docs / ci / housekeeping).
 - Cross-file doc sweeps go through a branch + PR; only tiny post-merge fixes push directly (AGENTS.md §6.4).
-- Adding a new Android adaptation: one section **plus** one Fix-index row in [PATCHES.md](PATCHES.md), a registry entry in `DSH_PATCH_SET` (`scripts/patch-lib.sh`), and a `VERSION` bump so a release ships it — the READMEs no longer carry a fixes table, so they need no edit unless user-facing behavior changed.
+- Adding a new Android adaptation: one section **plus** one Fix-index row in [PATCHES.md](PATCHES.md), a registry entry in `DSH_PATCH_SET` (`scripts/patch-lib.sh`), and a manual release dispatch with a new tag so a release ships it — the READMEs no longer carry a fixes table, so they need no edit unless user-facing behavior changed.
 - When you change the updater's help text, keep the `# help-begin`/`# help-end` sentinel contract (CI asserts it); `README.md`/`README.zh-CN.md` parameter tables must match the sentinel.
 - GitHub token for manual release/API work: `~/.config/dsh-termux/.env` (`GH_TOKEN`), sourced manually, never committed (AGENTS.md §2). Maintainer GitHub operations use the [`gh` CLI](https://cli.github.com/) — installing it is recommended; `gh` reads `GH_TOKEN` from the environment, so sourcing that file is the only authentication step. Device-side scripts deliberately never depend on `gh`.
 

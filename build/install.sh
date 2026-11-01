@@ -35,7 +35,7 @@ PREFIX="${DSH_RUNTIME_DIR:-$HOME/.local/opt/dsh-termux-runtime}"
 BIN_DIR="${DSH_BIN_DIR:-$HOME/.local/bin}"
 
 usage() {
-  cat <<'EOF'
+	cat <<'EOF'
 install.sh — install the dsh-termux runtime on Termux (arm64).
 
 Usage:
@@ -65,26 +65,42 @@ EOF
 }
 
 while [ $# -gt 0 ]; do
-  case "${1,,}" in
-    -y|--yes) DSH_ASSUME_YES=1 ;;
-    -p|--package) PKG="$2"; shift ;;
-    --prefix) PREFIX="$2"; shift ;;
-    --bin) BIN_DIR="$2"; shift ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "install.sh: unknown option: $1" >&2; usage >&2; exit 1 ;;
-  esac
-  shift
+	case "${1,,}" in
+	-y | --yes) DSH_ASSUME_YES=1 ;;
+	-p | --package)
+		PKG="$2"
+		shift
+		;;
+	--prefix)
+		PREFIX="$2"
+		shift
+		;;
+	--bin)
+		BIN_DIR="$2"
+		shift
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		echo "install.sh: unknown option: $1" >&2
+		usage >&2
+		exit 1
+		;;
+	esac
+	shift
 done
 
 # --- Pipe-mode guard ---------------------------------------------------------
 # Under `curl | bash` stdin IS the script stream: a `read` would swallow the
 # rest of the script as its "answer". Non-interactive mode is mandatory there.
 if [ ! -t 0 ] && [ "$DSH_ASSUME_YES" != "1" ]; then
-  echo "!! stdin is not a terminal (pipe mode), but prompts need answers." >&2
-  echo "   Re-run non-interactively:" >&2
-  echo "       curl -fsSL .../install.sh | bash -s -- -y" >&2
-  echo "   Or download install.sh first and run it interactively." >&2
-  exit 1
+	echo "!! stdin is not a terminal (pipe mode), but prompts need answers." >&2
+	echo "   Re-run non-interactively:" >&2
+	echo "       curl -fsSL .../install.sh | bash -s -- -y" >&2
+	echo "   Or download install.sh first and run it interactively." >&2
+	exit 1
 fi
 
 # --- Resolve the tarball -----------------------------------------------------
@@ -93,47 +109,47 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || SCRIPT_DIR="$PWD"
 
 DOWNLOADED=""
 cleanup() {
-  if [ -n "$DOWNLOADED" ] && [ -f "$DOWNLOADED" ]; then
-    rm -f "$DOWNLOADED"
-  fi
+	if [ -n "$DOWNLOADED" ] && [ -f "$DOWNLOADED" ]; then
+		rm -f "$DOWNLOADED"
+	fi
 }
 trap cleanup EXIT
 
 if [ -z "$PKG" ]; then
-  PKG="$(ls -1 "$SCRIPT_DIR"/*-runtime.tar.gz 2>/dev/null | head -1 || true)"
+	PKG="$(ls -1 "$SCRIPT_DIR"/*-runtime.tar.gz 2>/dev/null | head -1 || true)"
 fi
 
 if [ -z "$PKG" ]; then
-  ASSET="dsh-termux-runtime.tar.gz"
-  if [ "$RELEASE" = "latest" ]; then
-    URL="https://github.com/$REPO/releases/latest/download/$ASSET"
-  else
-    URL="https://github.com/$REPO/releases/download/$RELEASE/$ASSET"
-  fi
-  echo "==> No local runtime tarball found; downloading"
-  echo "    $URL"
-  DL_DIR="${TMPDIR:-$HOME/.cache/dsh-termux}"
-  mkdir -p "$DL_DIR"
-  DOWNLOADED="$(mktemp "$DL_DIR/runtime.XXXXXXXX.tar.gz")"
-  # Bootstrap copy of dsh_fetch's integrity discipline: scripts/common.sh
-  # (where dsh_fetch lives) travels INSIDE the tarball being downloaded here,
-  # so it cannot be sourced yet — chicken-and-egg. The mktemp name is already
-  # unique, so no pre-existing file needs the .part atomic-replace protection;
-  # the real gap is verification: prove the download is intact gzip BEFORE
-  # trusting it, so corruption fails here instead of as a mystery tar error.
-  if ! curl -fL --retry 3 --retry-delay 2 -o "$DOWNLOADED" "$URL" \
-      || ! gzip -t "$DOWNLOADED" 2>/dev/null; then
-    echo "!! Download failed or the tarball is corrupt. Check the network, or" >&2
-    echo "   download $ASSET from https://github.com/$REPO/releases manually" >&2
-    echo "   and pass it with -p." >&2
-    exit 1
-  fi
-  PKG="$DOWNLOADED"
+	ASSET="dsh-termux-runtime.tar.gz"
+	if [ "$RELEASE" = "latest" ]; then
+		URL="https://github.com/$REPO/releases/latest/download/$ASSET"
+	else
+		URL="https://github.com/$REPO/releases/download/$RELEASE/$ASSET"
+	fi
+	echo "==> No local runtime tarball found; downloading"
+	echo "    $URL"
+	DL_DIR="${TMPDIR:-$HOME/.cache/dsh-termux}"
+	mkdir -p "$DL_DIR"
+	DOWNLOADED="$(mktemp "$DL_DIR/runtime.XXXXXXXX.tar.gz")"
+	# Bootstrap copy of dsh_fetch's integrity discipline: scripts/common.sh
+	# (where dsh_fetch lives) travels INSIDE the tarball being downloaded here,
+	# so it cannot be sourced yet — chicken-and-egg. The mktemp name is already
+	# unique, so no pre-existing file needs the .part atomic-replace protection;
+	# the real gap is verification: prove the download is intact gzip BEFORE
+	# trusting it, so corruption fails here instead of as a mystery tar error.
+	if ! curl -fL --retry 3 --retry-delay 2 -o "$DOWNLOADED" "$URL" ||
+		! gzip -t "$DOWNLOADED" 2>/dev/null; then
+		echo "!! Download failed or the tarball is corrupt. Check the network, or" >&2
+		echo "   download $ASSET from https://github.com/$REPO/releases manually" >&2
+		echo "   and pass it with -p." >&2
+		exit 1
+	fi
+	PKG="$DOWNLOADED"
 fi
 
 if [ ! -f "$PKG" ]; then
-  echo "!! Runtime tarball not found: $PKG" >&2
-  exit 1
+	echo "!! Runtime tarball not found: $PKG" >&2
+	exit 1
 fi
 PKG="$(cd "$(dirname "$PKG")" && pwd)/$(basename "$PKG")"
 
@@ -144,9 +160,9 @@ echo "    bin dir : $BIN_DIR"
 
 # --- Preflight ---------------------------------------------------------------
 if ! command -v grun >/dev/null 2>&1; then
-  echo "!! grun (Termux glibc-runner) not found. Install with:" >&2
-  echo "    pkg install glibc-repo && pkg install glibc glibc-runner" >&2
-  exit 1
+	echo "!! grun (Termux glibc-runner) not found. Install with:" >&2
+	echo "    pkg install glibc-repo && pkg install glibc glibc-runner" >&2
+	exit 1
 fi
 
 # --- Extract -----------------------------------------------------------------
@@ -159,9 +175,10 @@ tar -xzf "$PKG" -C "$PREFIX" scripts/common.sh
 source "$PREFIX/scripts/common.sh"
 
 if ! ask_yes_no "Install dsh-termux runtime into $PREFIX?"; then
-  rm -rf "$PREFIX/scripts"   # remove the pre-extracted common.sh (this dir is ours)
-  rmdir "$PREFIX" 2>/dev/null || true
-  echo "Aborted."; exit 1
+	rm -rf "$PREFIX/scripts" # remove the pre-extracted common.sh (this dir is ours)
+	rmdir "$PREFIX" 2>/dev/null || true
+	echo "Aborted."
+	exit 1
 fi
 echo "==> Extracting runtime into $PREFIX ..."
 
@@ -173,13 +190,13 @@ echo "==> Extracting runtime into $PREFIX ..."
 # itself, so members added later are covered automatically; anything the
 # tarball does not own stays untouched.
 echo "    clearing any previous runtime (re-extracting over one leaves stale files)"
-tar -tzf "$PKG" | sed 's|^\./||' | cut -d/ -f1 | sort -u \
-  | while read -r member; do
-      case "$member" in
-        ""|"."|".."|/*|../*|*/../*) continue ;;  # never rm anything path-weird
-      esac
-      rm -rf "${PREFIX:?}/$member"
-    done
+tar -tzf "$PKG" | sed 's|^\./||' | cut -d/ -f1 | sort -u |
+	while read -r member; do
+		case "$member" in
+		"" | "." | ".." | /* | ../* | */../*) continue ;; # never rm anything path-weird
+		esac
+		rm -rf "${PREFIX:?}/$member"
+	done
 
 tar -xzf "$PKG" -C "$PREFIX"
 NODE_BIN="$PREFIX/node/bin/node"
@@ -192,18 +209,18 @@ DSH_BIN="$WORK_DIR/node_modules/@deepseek-ai/dsh/lib/bin.js"
 # VERSION file at the root; for older ones (1.2.0 and before) fall back to
 # deriving it from the release tag when it is known.
 if [ ! -f "$PREFIX/VERSION" ]; then
-  case "${RELEASE:-unknown}" in
-    dsh-*-*) printf '%s\n' "${RELEASE##*-}" > "$PREFIX/VERSION" ;;
-  esac
+	case "${RELEASE:-unknown}" in
+	dsh-*-*) printf '%s\n' "${RELEASE##*-}" >"$PREFIX/VERSION" ;;
+	esac
 fi
 
 if [ ! -x "$NODE_BIN" ]; then
-  echo "!! node not found in tarball ($NODE_BIN). Corrupt package?" >&2
-  exit 1
+	echo "!! node not found in tarball ($NODE_BIN). Corrupt package?" >&2
+	exit 1
 fi
 if [ ! -f "$DSH_BIN" ]; then
-  echo "!! dsh not found in tarball ($DSH_BIN). Corrupt package?" >&2
-  exit 1
+	echo "!! dsh not found in tarball ($DSH_BIN). Corrupt package?" >&2
+	exit 1
 fi
 
 # --- Configure Node for direct exec -----------------------------------------
@@ -230,29 +247,21 @@ echo "    Wrapper written: $WRAPPER"
 mkdir -p "$BIN_DIR"
 LINK="$BIN_DIR/dsh"
 if [ -e "$LINK" ] || [ -L "$LINK" ]; then
-  if ! ask_yes_no "Replace existing $LINK?"; then
-    echo "    Skipped symlink; you can run the wrapper as '$WRAPPER'."; SKIP_LINK=1
-  fi
+	if ! ask_yes_no "Replace existing $LINK?"; then
+		echo "    Skipped symlink; you can run the wrapper as '$WRAPPER'."
+		SKIP_LINK=1
+	fi
 fi
 if [ "${SKIP_LINK:-0}" != "1" ]; then
-  ln -sf "$WRAPPER" "$LINK"
-  echo "    Symlinked: $LINK -> $WRAPPER"
+	ln -sf "$WRAPPER" "$LINK"
+	echo "    Symlinked: $LINK -> $WRAPPER"
 fi
 
 # --- Prepend bin dir to PATH in ~/.bashrc ------------------------------------
-BASHRC="$HOME/.bashrc"
-TAG="# dsh-termux"
-if ! grep -qF "$TAG" "$BASHRC" 2>/dev/null; then
-  if ask_yes_no "Add '$BIN_DIR' to PATH in ~/.bashrc (tagged $TAG)?"; then
-    printf '\n%s\n# Prepend dsh-termux bin dir so the dsh wrapper is on PATH.\nexport PATH="%s:$PATH"\n' \
-      "$TAG" "$BIN_DIR" >> "$BASHRC"
-    echo "    Appended to $BASHRC (tagged $TAG)."
-  else
-    echo "    Skipped PATH setup; run the wrapper as '$WRAPPER'."
-  fi
-else
-  echo "    ~/.bashrc already tagged with $TAG; leaving it unchanged."
-fi
+# ensure_bin_dir_on_path (sourced from scripts/common.sh) owns the tagged PATH
+# line, so the same block cannot drift between the release installer, the
+# device pipeline (01) and anything added later.
+ensure_bin_dir_on_path "$BIN_DIR"
 
 # --- Register node/npm/npx/pnpm shims (glibc Node) ----------------------------
 # register_node_shims (sourced from scripts/common.sh) asks to uninstall a

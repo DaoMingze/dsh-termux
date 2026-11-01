@@ -7,92 +7,212 @@
 # Ask a yes/no question. Default is YES. Returns 0 (yes) or 1 (no).
 # Honors DSH_ASSUME_YES=1 (from the -y flag): returns the default without asking.
 ask_yes_no() {
-  local prompt="$1"
-  local default="${2:-yes}"   # yes | no
-  if [ "${DSH_ASSUME_YES:-0}" = "1" ]; then
-    echo "   [auto-yes] ${prompt}"
-    [ "$default" = "yes" ]
-    return $?
-  fi
-  local ans
-  while :; do
-    if [ "$default" = "yes" ]; then
-      printf '%s [Y/n]: ' "$prompt"
-    else
-      printf '%s [y/N]: ' "$prompt"
-    fi
-    read -r ans
-    case "${ans,,}" in
-      "" ) [ "$default" = "yes" ]; return $? ;;
-      y|yes ) return 0 ;;
-      n|no ) return 1 ;;
-      * ) echo "   Please answer y or n." ;;
-    esac
-  done
+	local prompt="$1"
+	local default="${2:-yes}" # yes | no
+	if [ "${DSH_ASSUME_YES:-0}" = "1" ]; then
+		echo "   [auto-yes] ${prompt}"
+		[ "$default" = "yes" ]
+		return $?
+	fi
+	local answer
+	while :; do
+		if [ "$default" = "yes" ]; then
+			printf '%s [Y/n]: ' "$prompt"
+		else
+			printf '%s [y/N]: ' "$prompt"
+		fi
+		read -r answer
+		case "${answer,,}" in
+		"")
+			[ "$default" = "yes" ]
+			return $?
+			;;
+		y | yes) return 0 ;;
+		n | no) return 1 ;;
+		*) echo "   Please answer y or n." ;;
+		esac
+	done
 }
 
 # Ask for a value with a default; validates input with a validator function.
 #   ask_input <var_name> <prompt> <default> <validator_func>
 # The validator receives the candidate as $1 and returns 0 if valid.
 ask_input() {
-  local var="$1" prompt="$2" default="$3" validator="$4"
-  if [ "${DSH_ASSUME_YES:-0}" = "1" ]; then
-    printf -v "$var" '%s' "$default"
-    echo "   [auto] ${prompt} -> ${default}"
-    return 0
-  fi
-  local val
-  while :; do
-    printf '%s [%s]: ' "$prompt" "$default"
-    read -r val
-    val="${val:-$default}"
-    # 空默认 + 空输入 = 用户接受「无值」语义: 直接放行, 由调用方归一 (如
-    # 00-setup 的 ${DSH_WORK_DIR:-$DSH_RUNTIME_DIR/work})。空串此刻若再交给
-    # validator (validate_abs_path 等) 必被拒, 提示里「empty = 默认」的承诺
-    # 就成了交互死循环 (architecture 审计实测确认)。default 非空时 val 已
-    # 回落为 default, 不会走到这里, 各原有调用点行为不变。
-    if [ -z "$val" ]; then
-      printf -v "$var" '%s' "$val"
-      return 0
-    fi
-    if [ -z "$validator" ] || "$validator" "$val"; then
-      printf -v "$var" '%s' "$val"
-      return 0
-    fi
-    echo "   Invalid input, please try again."
-  done
+	local var="$1" prompt="$2" default="$3" validator="$4"
+	if [ "${DSH_ASSUME_YES:-0}" = "1" ]; then
+		printf -v "$var" '%s' "$default"
+		echo "   [auto] ${prompt} -> ${default}"
+		return 0
+	fi
+	local val
+	while :; do
+		printf '%s [%s]: ' "$prompt" "$default"
+		read -r val
+		val="${val:-$default}"
+		# 空默认 + 空输入 = 用户接受「无值」语义: 直接放行, 由调用方归一 (如
+		# 00-setup 的 ${DSH_WORK_DIR:-$DSH_RUNTIME_DIR/work})。空串此刻若再交给
+		# validator (validate_abs_path 等) 必被拒, 提示里「empty = 默认」的承诺
+		# 就成了交互死循环 (architecture 审计实测确认)。default 非空时 val 已
+		# 回落为 default, 不会走到这里, 各原有调用点行为不变。
+		if [ -z "$val" ]; then
+			printf -v "$var" '%s' "$val"
+			return 0
+		fi
+		if [ -z "$validator" ] || "$validator" "$val"; then
+			printf -v "$var" '%s' "$val"
+			return 0
+		fi
+		echo "   Invalid input, please try again."
+	done
 }
 
 # --- Validators -----------------------------------------------------------
 
 # Absolute path, no spaces, no leading '~'.
 validate_abs_path() {
-  local p="$1"
-  [[ "$p" =~ ^/ ]] || { echo "   (must be an absolute path starting with /)"; return 1; }
-  [[ "$p" != *" "* ]] || { echo "   (must not contain spaces — npm and the ELF loader path dislike them)"; return 1; }
-  return 0
+	local p="$1"
+	[[ "$p" =~ ^/ ]] || {
+		echo "   (must be an absolute path starting with /)"
+		return 1
+	}
+	[[ "$p" != *" "* ]] || {
+		echo "   (must not contain spaces — npm and the ELF loader path dislike them)"
+		return 1
+	}
+	return 0
 }
 
-# Semantic version X.Y.Z matching dsh engines: ^22.19.0 || >=24.0.0.
+# A Node spec, in any of the three forms resolve_node_version accepts:
+#   lts | lts/*   the ACTIVE LTS line (whatever nodejs.org currently calls LTS)
+#   24            a bare major
+#   24.19.0       an exact release (a leading "v" is tolerated)
+# Concrete forms are also checked against dsh's engines (^22.19.0 || >=24.0.0);
+# a bare major cannot prove the minor, so 22 is accepted (latest-v22.x is well
+# past 22.19) and anything older is rejected.
 validate_node_version() {
-  local v="${1#v}"
-  if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "   (expected X.Y.Z, e.g. 24.19.0)"
-    return 1
-  fi
-  local major minor
-  major="${v%%.*}"; minor="${v#*.}"; minor="${minor%%.*}"
-  if { [ "$major" -eq 22 ] && [ "$minor" -ge 19 ]; } || [ "$major" -ge 24 ]; then
-    return 0
-  fi
-  echo "   (dsh requires Node ^22.19.0 || >=24.0.0; you entered ${major}.${minor})"
-  return 1
+	local v="${1#v}"
+	case "${v,,}" in
+	lts | lts/\*) return 0 ;;
+	esac
+	if [[ "$v" =~ ^[0-9]+$ ]]; then
+		if [ "$v" -lt 22 ]; then
+			echo "   (dsh requires Node ^22.19.0 || >=24.0.0; ${v}.x is too old)"
+			return 1
+		fi
+		return 0
+	fi
+	if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		echo "   (expected lts, a bare major such as 24, or X.Y.Z such as 24.19.0)"
+		return 1
+	fi
+	local major minor
+	major="${v%%.*}"
+	minor="${v#*.}"
+	minor="${minor%%.*}"
+	if { [ "$major" -eq 22 ] && [ "$minor" -ge 19 ]; } || [ "$major" -ge 24 ]; then
+		return 0
+	fi
+	echo "   (dsh requires Node ^22.19.0 || >=24.0.0; you entered ${major}.${minor})"
+	return 1
+}
+
+# resolve_node_version <spec> — print the concrete X.Y.Z that <spec> names.
+#
+#   lts | lts/*  the ACTIVE LTS line's newest release. nodejs.org/dist/
+#                index.json lists releases newest-first, so the first entry
+#                that carries an LTS codename ("lts": "Krypton") is exactly
+#                that line's latest patch. The maintenance line is older and
+#                therefore comes later in the array — it is never picked.
+#   24           the newest patch of the v24 line (latest-v24.x manifest)
+#   24.19.0      itself
+#
+# stdout carries the version and NOTHING else, so callers may capture it; all
+# narration and warnings go to stderr. Requires curl. One resolver serves both
+# sides of the project: the device path (01) and the release build
+# (build/build-runtime.sh), so "lts" cannot mean two different things.
+resolve_node_version() {
+	local spec="${1#v}" list v
+	spec="$(printf '%s' "$spec" | tr -d '[:space:]')"
+	[ -n "$spec" ] || {
+		echo "!! resolve_node_version: empty Node version spec" >&2
+		return 1
+	}
+
+	case "${spec,,}" in
+	lts | lts/\*)
+		echo "==> Resolving the active LTS line (nodejs.org/dist/index.json) ..." >&2
+		list="$(curl -fsSL https://nodejs.org/dist/index.json)" ||
+			{
+				echo "!! cannot fetch nodejs.org/dist/index.json (offline?)" >&2
+				return 1
+			}
+		v="$(printf '%s\n' "$list" | awk -F'"' '
+        /"version": *"v/ { ver = $4 }
+        /"lts": *"/      { print substr(ver, 2); exit }')"
+		[ -n "$v" ] || {
+			echo "!! cannot parse an LTS release out of index.json" >&2
+			return 1
+		}
+		# The LTS line moves on its own schedule. Natives are built against a
+		# specific node major (NODE_MODULE_VERSION), so say it out loud when the
+		# resolved major leaves the lines this project exercises — 02's natives
+		# overlay then has to match, or it fails there instead of here.
+		case "${v%%.*}" in
+		22 | 24) ;;
+		*) echo "!! note: the active LTS line resolved to v${v}, outside the exercised v22/v24 lines; the prebuilt natives asset must be built for that major (see 02)" >&2 ;;
+		esac
+		printf '%s\n' "$v"
+		return 0
+		;;
+	esac
+
+	if [[ "$spec" =~ ^[0-9]+$ ]]; then
+		case "$spec" in
+		24) ;;
+		22) echo "!! note: dsh engines is ^22.19.0 || >=24; v22 works but is uncommon" >&2 ;;
+		23) echo "!! note: v23 is an odd non-LTS line and may not satisfy dsh engines" >&2 ;;
+		*) echo "!! note: only the v22/v24 lines are exercised; other majors may break the native overlay ABI" >&2 ;;
+		esac
+		echo "==> Resolving the latest Node v${spec}.x ..." >&2
+		list="$(curl -fsSL "https://nodejs.org/dist/latest-v${spec}.x/SHASUMS256.txt")" ||
+			{
+				echo "!! cannot fetch the latest-v${spec}.x manifest (line EOL? offline?)" >&2
+				return 1
+			}
+		v="$(printf '%s\n' "$list" |
+			sed -n 's/^[0-9a-f]\{64\}  node-v\([0-9][0-9.]*\)-linux-arm64\.tar\.xz$/\1/p' | head -1)"
+		[ -n "$v" ] || {
+			echo "!! cannot parse a version out of the latest-v${spec}.x manifest" >&2
+			return 1
+		}
+		printf '%s\n' "$v"
+		return 0
+	fi
+
+	validate_node_version "$spec" >&2 ||
+		{
+			echo "!! resolve_node_version: unusable Node version spec: $spec" >&2
+			return 1
+		}
+	printf '%s\n' "$spec"
 }
 
 # A bare port number 1..65535.
 validate_port() {
-  local p="$1"
-  [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ] && [ "$p" -le 65535 ]
+	local p="$1"
+	[[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ] && [ "$p" -le 65535 ]
+}
+
+# A dsh profile name: one shell-safe token (web, headless, tui, ...).
+# The name is handed to dsh as `--profile <name>`, so nothing that needs
+# quoting belongs here.
+validate_profile_name() {
+	local p="$1"
+	if [[ "$p" =~ ^[A-Za-z0-9._@-]+$ ]]; then
+		return 0
+	fi
+	echo "   (expected a single profile name, e.g. web or headless)"
+	return 1
 }
 
 # --- dsh_fetch: the one download helper for shipped scripts ----------------
@@ -122,58 +242,67 @@ validate_port() {
 # The helper does NOT create <dest>'s directory — callers stage their own.
 # Requires curl.
 dsh_fetch() {
-  local gzip_check=0 quiet=0 max_time=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --gzip)  gzip_check=1 ;;
-      --quiet) quiet=1 ;;
-      --max-time)
-        [ $# -ge 2 ] || { echo "!! dsh_fetch: --max-time needs a value" >&2; return 2; }
-        max_time="$2"; shift ;;
-      -*) echo "!! dsh_fetch: unknown option: $1" >&2; return 2 ;;
-      *) break ;;
-    esac
-    shift
-  done
-  if [ $# -ne 2 ]; then
-    echo "!! dsh_fetch: usage: dsh_fetch [--gzip] [--quiet] [--max-time N] <url> <dest>" >&2
-    return 2
-  fi
-  local url="$1" dest="$2" tmp rc=0
-  local -a curl_cmd=(curl -fL --retry "${DSH_FETCH_RETRY:-3}" --retry-delay 2)
-  [ -z "$max_time" ] || curl_cmd+=(--max-time "$max_time")
-  tmp="$dest.part"
-  rm -f "$tmp"
-  "${curl_cmd[@]}" -o "$tmp" "$url" || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    rm -f "$tmp"
-    [ "$quiet" = 1 ] || {
-      echo "!! dsh_fetch: download failed (curl exit $rc): $url" >&2
-      echo "   any previous file at $dest was left untouched; behind a" >&2
-      echo "   proxy, export https_proxy/http_proxy first." >&2
-    }
-    return 1
-  fi
-  if [ "$gzip_check" = 1 ] && ! gzip -t "$tmp" 2>/dev/null; then
-    rm -f "$tmp"
-    [ "$quiet" = 1 ] || echo "!! dsh_fetch: downloaded file is not valid gzip (truncated?): $url" >&2
-    return 1
-  fi
-  mv -f "$tmp" "$dest"
+	local gzip_check=0 quiet=0 max_time=""
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--gzip) gzip_check=1 ;;
+		--quiet) quiet=1 ;;
+		--max-time)
+			[ $# -ge 2 ] || {
+				echo "!! dsh_fetch: --max-time needs a value" >&2
+				return 2
+			}
+			max_time="$2"
+			shift
+			;;
+		-*)
+			echo "!! dsh_fetch: unknown option: $1" >&2
+			return 2
+			;;
+		*) break ;;
+		esac
+		shift
+	done
+	if [ $# -ne 2 ]; then
+		echo "!! dsh_fetch: usage: dsh_fetch [--gzip] [--quiet] [--max-time N] <url> <dest>" >&2
+		return 2
+	fi
+	local url="$1" dest="$2" tmp rc=0
+	local -a curl_cmd=(curl -fL --retry "${DSH_FETCH_RETRY:-3}" --retry-delay 2)
+	[ -z "$max_time" ] || curl_cmd+=(--max-time "$max_time")
+	tmp="$dest.part"
+	rm -f "$tmp"
+	"${curl_cmd[@]}" -o "$tmp" "$url" || rc=$?
+	if [ "$rc" -ne 0 ]; then
+		rm -f "$tmp"
+		[ "$quiet" = 1 ] || {
+			echo "!! dsh_fetch: download failed (curl exit $rc): $url" >&2
+			echo "   any previous file at $dest was left untouched; behind a" >&2
+			echo "   proxy, export https_proxy/http_proxy first." >&2
+		}
+		return 1
+	fi
+	if [ "$gzip_check" = 1 ] && ! gzip -t "$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		[ "$quiet" = 1 ] || echo "!! dsh_fetch: downloaded file is not valid gzip (truncated?): $url" >&2
+		return 1
+	fi
+	mv -f "$tmp" "$dest"
 }
 
 # --- glibc Node ------------------------------------------------------------
 
 # Termux's glibc prefix; exported inside a glibc-runner shell, defaulted here.
 glibc_prefix() {
-  echo "${GLIBC_PREFIX:-/data/data/com.termux/files/usr/glibc}"
+	echo "${GLIBC_PREFIX:-/data/data/com.termux/files/usr/glibc}"
 }
 
 # Run the configured Node the same way the generated `dsh` wrapper does.
 #   run_glibc_node <node_bin> [args...]
 run_glibc_node() {
-  local node_bin="$1"; shift
-  env -u LD_PRELOAD PATH="$(glibc_prefix)/bin:$PATH" "$node_bin" "$@"
+	local node_bin="$1"
+	shift
+	env -u LD_PRELOAD PATH="$(glibc_prefix)/bin:$PATH" "$node_bin" "$@"
 }
 
 # Point the official Node binary's ELF interpreter at Termux's glibc loader so
@@ -205,53 +334,53 @@ run_glibc_node() {
 #
 #   configure_glibc_node <node_bin>
 configure_glibc_node() {
-  local node_bin="$1"
-  local prefix loader current staged version
-  prefix="$(glibc_prefix)"
+	local node_bin="$1"
+	local prefix loader current staged version
+	prefix="$(glibc_prefix)"
 
-  if [ ! -x "$node_bin" ]; then
-    echo "!! configure_glibc_node: '$node_bin' is missing or not executable" >&2
-    return 1
-  fi
-  if ! command -v patchelf >/dev/null 2>&1; then
-    echo "!! configure_glibc_node: patchelf not found (it ships with glibc-runner)" >&2
-    return 1
-  fi
-  loader="$(ls "$prefix"/lib/ld-linux-*.so.* 2>/dev/null | head -1 || true)"
-  if [ -z "$loader" ]; then
-    echo "!! configure_glibc_node: no glibc loader found in $prefix/lib" >&2
-    return 1
-  fi
+	if [ ! -x "$node_bin" ]; then
+		echo "!! configure_glibc_node: '$node_bin' is missing or not executable" >&2
+		return 1
+	fi
+	if ! command -v patchelf >/dev/null 2>&1; then
+		echo "!! configure_glibc_node: patchelf not found (it ships with glibc-runner)" >&2
+		return 1
+	fi
+	loader="$(ls "$prefix"/lib/ld-linux-*.so.* 2>/dev/null | head -1 || true)"
+	if [ -z "$loader" ]; then
+		echo "!! configure_glibc_node: no glibc loader found in $prefix/lib" >&2
+		return 1
+	fi
 
-  current="$(patchelf --print-interpreter "$node_bin" 2>/dev/null || true)"
-  if [ "$current" = "$loader" ]; then
-    echo "    Node already configured for direct exec."
-    return 0
-  fi
+	current="$(patchelf --print-interpreter "$node_bin" 2>/dev/null || true)"
+	if [ "$current" = "$loader" ]; then
+		echo "    Node already configured for direct exec."
+		return 0
+	fi
 
-  staged="$node_bin.dsh-configure.$$"
-  rm -f "$staged"
-  echo "    Configuring Node for direct exec (interpreter -> $loader) ..."
-  if ! cp "$node_bin" "$staged"; then
-    rm -f "$staged"
-    echo "!! configure_glibc_node: could not stage a copy (disk space?); Node left unchanged" >&2
-    return 1
-  fi
-  chmod +x "$staged"
-  if ! patchelf --set-interpreter "$loader" "$staged"; then
-    rm -f "$staged"
-    echo "!! configure_glibc_node: patchelf failed; Node left unchanged" >&2
-    return 1
-  fi
-  # The patched COPY must prove it runs before it may replace a working node.
-  version="$(env -u LD_PRELOAD "$staged" --version 2>/dev/null || true)"
-  if [ -z "$version" ]; then
-    rm -f "$staged"
-    echo "!! configure_glibc_node: the patched Node does not run; Node left unchanged" >&2
-    return 1
-  fi
-  mv -f "$staged" "$node_bin"
-  echo "    Node configured for direct exec: $version"
+	staged="$node_bin.dsh-configure.$$"
+	rm -f "$staged"
+	echo "    Configuring Node for direct exec (interpreter -> $loader) ..."
+	if ! cp "$node_bin" "$staged"; then
+		rm -f "$staged"
+		echo "!! configure_glibc_node: could not stage a copy (disk space?); Node left unchanged" >&2
+		return 1
+	fi
+	chmod +x "$staged"
+	if ! patchelf --set-interpreter "$loader" "$staged"; then
+		rm -f "$staged"
+		echo "!! configure_glibc_node: patchelf failed; Node left unchanged" >&2
+		return 1
+	fi
+	# The patched COPY must prove it runs before it may replace a working node.
+	version="$(env -u LD_PRELOAD "$staged" --version 2>/dev/null || true)"
+	if [ -z "$version" ]; then
+		rm -f "$staged"
+		echo "!! configure_glibc_node: the patched Node does not run; Node left unchanged" >&2
+		return 1
+	fi
+	mv -f "$staged" "$node_bin"
+	echo "    Node configured for direct exec: $version"
 }
 
 # --- dsh wrapper ----------------------------------------------------------
@@ -270,8 +399,8 @@ configure_glibc_node() {
 #
 #   write_dsh_opener <opener_path>
 write_dsh_opener() {
-  local opener="$1"
-  cat > "$opener" << 'DSH_OPENER'
+	local opener="$1"
+	cat >"$opener" <<'DSH_OPENER'
 #!/data/data/com.termux/files/usr/bin/sh
 # dsh-termux-open — the $BROWSER opener the dsh wrapper installs on Termux.
 # Generated by dsh-termux; regenerated by every install/update, so do not edit.
@@ -303,7 +432,7 @@ fi
 
 exec "$tool" "$target"
 DSH_OPENER
-  chmod +x "$opener"
+	chmod +x "$opener"
 }
 
 # Write the `dsh` launcher: it execs the configured Node DIRECTLY (never
@@ -342,11 +471,11 @@ DSH_OPENER
 # exactly one copy of these texts — no need to mirror them (CI verifies
 # install.sh delegates instead of duplicating).
 write_dsh_wrapper() {
-  local wrapper="$1" node_bin="$2" dsh_bin="$3" updater="${4:-}"
-  local opener
-  opener="$(cd "$(dirname "$wrapper")" && pwd)/dsh-termux-open"
-  write_dsh_opener "$opener"
-  cat > "$wrapper" << 'DSH_WRAPPER_HEAD'
+	local wrapper="$1" node_bin="$2" dsh_bin="$3" updater="${4:-}"
+	local opener
+	opener="$(cd "$(dirname "$wrapper")" && pwd)/dsh-termux-open"
+	write_dsh_opener "$opener"
+	cat >"$wrapper" <<'DSH_WRAPPER_HEAD'
 #!/data/data/com.termux/files/usr/bin/bash
 # dsh wrapper generated by dsh-termux (glibc Node, exec'd directly).
 # Accepts the same arguments as the original dsh CLI.
@@ -372,15 +501,15 @@ export PATH="/data/data/com.termux/files/usr/glibc/bin:$PATH"
 # first, and dsh's native path opener reads it directly; point both at the
 # Android-intent opener beside this wrapper. An inherited $BROWSER always wins.
 DSH_WRAPPER_HEAD
-  printf 'if [ -z "${BROWSER:-}" ] && [ -x "%s" ]; then export BROWSER="%s"; fi\n\n' \
-    "$opener" "$opener" >> "$wrapper"
-  # Update shortcut (see the function header): only $1 is intercepted; every
-  # other invocation falls through to the real dsh untouched. The branch sits
-  # after "unset LD_PRELOAD", so the updater inherits exactly the environment
-  # the wrapper keeps for node. A missing updater script fails with its own
-  # explicit message instead of dsh's unrelated "--profile required" error.
-  if [ -n "$updater" ]; then
-    cat >> "$wrapper" << DSH_WRAPPER_UPDATE
+	printf 'if [ -z "${BROWSER:-}" ] && [ -x "%s" ]; then export BROWSER="%s"; fi\n\n' \
+		"$opener" "$opener" >>"$wrapper"
+	# Update shortcut (see the function header): only $1 is intercepted; every
+	# other invocation falls through to the real dsh untouched. The branch sits
+	# after "unset LD_PRELOAD", so the updater inherits exactly the environment
+	# the wrapper keeps for node. A missing updater script fails with its own
+	# explicit message instead of dsh's unrelated "--profile required" error.
+	if [ -n "$updater" ]; then
+		cat >>"$wrapper" <<DSH_WRAPPER_UPDATE
 if [ "\${1:-}" = "update" ]; then
   if [ -f "${updater}" ]; then
     shift
@@ -392,9 +521,9 @@ if [ "\${1:-}" = "update" ]; then
 fi
 
 DSH_WRAPPER_UPDATE
-  fi
-  printf 'exec "%s" --expose-internals "%s" "$@"\n' "$node_bin" "$dsh_bin" >> "$wrapper"
-  chmod +x "$wrapper"
+	fi
+	printf 'exec "%s" --expose-internals "%s" "$@"\n' "$node_bin" "$dsh_bin" >>"$wrapper"
+	chmod +x "$wrapper"
 }
 # --- node/npm/npx shims ----------------------------------------------------
 
@@ -407,15 +536,15 @@ DSH_NODE_SHIM_TAG="# dsh-termux node shim"
 # (regeneration is the update path); a foreign file is never clobbered without
 # an explicit yes, and the default keeps it (also what DSH_ASSUME_YES=1 does).
 _emit_node_shim() {
-  local target="$1" exec_line="$2"
-  if [ -e "$target" ] || [ -L "$target" ]; then
-    if ! grep -qF "$DSH_NODE_SHIM_TAG" "$target" 2>/dev/null \
-       && ! ask_yes_no "Replace existing $target with the dsh-termux shim?" no; then
-      echo "    Skipped $target (existing file kept; it stays ahead of the glibc shim on PATH)."
-      return 0
-    fi
-  fi
-  cat > "$target" << DSH_SHIM
+	local target="$1" exec_line="$2"
+	if [ -e "$target" ] || [ -L "$target" ]; then
+		if ! grep -qF "$DSH_NODE_SHIM_TAG" "$target" 2>/dev/null &&
+			! ask_yes_no "Replace existing $target with the dsh-termux shim?" no; then
+			echo "    Skipped $target (existing file kept; it stays ahead of the glibc shim on PATH)."
+			return 0
+		fi
+	fi
+	cat >"$target" <<DSH_SHIM
 #!/data/data/com.termux/files/usr/bin/bash
 $DSH_NODE_SHIM_TAG (generated by dsh-termux; do not edit).
 # Reproduces the environment the dsh wrapper provides (dsh-termux
@@ -424,9 +553,9 @@ $DSH_NODE_SHIM_TAG (generated by dsh-termux; do not edit).
 unset LD_PRELOAD
 export PATH="/data/data/com.termux/files/usr/glibc/bin:\$PATH"
 DSH_SHIM
-  printf '%s\n' "$exec_line" >> "$target"
-  chmod +x "$target"
-  echo "    Shim written: $target"
+	printf '%s\n' "$exec_line" >>"$target"
+	chmod +x "$target"
+	echo "    Shim written: $target"
 }
 
 # write_node_shims <bin_dir> <node_root>
@@ -443,50 +572,77 @@ DSH_SHIM
 # device-side download. Older runtimes without pnpm degrade to a warning.
 # Idempotent; see register_node_shims for the install-time conflict prompt.
 write_node_shims() {
-  local bin_dir="$1" node_root="$2"
-  local node_bin="$node_root/bin/node"
-  local npm_cli="$node_root/lib/node_modules/npm/bin/npm-cli.js"
-  local npx_cli="$node_root/lib/node_modules/npm/bin/npx-cli.js"
-  local pnpm_js="$node_root/lib/node_modules/pnpm/bin/pnpm.cjs"
-  if [ ! -x "$node_bin" ]; then
-    echo "!! write_node_shims: '$node_bin' missing or not executable" >&2
-    return 1
-  fi
-  if [ ! -f "$npm_cli" ]; then
-    echo "!! write_node_shims: '$npm_cli' missing (unexpected Node layout)" >&2
-    return 1
-  fi
-  mkdir -p "$bin_dir"
-  _emit_node_shim "$bin_dir/node" "exec \"$node_bin\" \"\$@\""
-  _emit_node_shim "$bin_dir/npm"  "exec \"$node_bin\" \"$npm_cli\" \"\$@\""
-  if [ -f "$npx_cli" ]; then
-    _emit_node_shim "$bin_dir/npx" "exec \"$node_bin\" \"$npx_cli\" \"\$@\""
-  else
-    echo "    npx-cli.js not found; npx shim skipped (npm exec still works)." >&2
-  fi
-  if [ -f "$pnpm_js" ]; then
-    _emit_node_shim "$bin_dir/pnpm" "exec \"$node_bin\" \"$pnpm_js\" \"\$@\""
-  else
-    echo "    pnpm not bundled in this runtime; pnpm shim skipped." >&2
-    echo "    NOTE: 'dsh plugin' needs pnpm on PATH — upgrade the runtime to get it." >&2
-  fi
+	local bin_dir="$1" node_root="$2"
+	local node_bin="$node_root/bin/node"
+	local npm_cli="$node_root/lib/node_modules/npm/bin/npm-cli.js"
+	local npx_cli="$node_root/lib/node_modules/npm/bin/npx-cli.js"
+	local pnpm_js="$node_root/lib/node_modules/pnpm/bin/pnpm.cjs"
+	if [ ! -x "$node_bin" ]; then
+		echo "!! write_node_shims: '$node_bin' missing or not executable" >&2
+		return 1
+	fi
+	if [ ! -f "$npm_cli" ]; then
+		echo "!! write_node_shims: '$npm_cli' missing (unexpected Node layout)" >&2
+		return 1
+	fi
+	mkdir -p "$bin_dir"
+	_emit_node_shim "$bin_dir/node" "exec \"$node_bin\" \"\$@\""
+	_emit_node_shim "$bin_dir/npm" "exec \"$node_bin\" \"$npm_cli\" \"\$@\""
+	if [ -f "$npx_cli" ]; then
+		_emit_node_shim "$bin_dir/npx" "exec \"$node_bin\" \"$npx_cli\" \"\$@\""
+	else
+		echo "    npx-cli.js not found; npx shim skipped (npm exec still works)." >&2
+	fi
+	if [ -f "$pnpm_js" ]; then
+		_emit_node_shim "$bin_dir/pnpm" "exec \"$node_bin\" \"$pnpm_js\" \"\$@\""
+	else
+		echo "    pnpm not bundled in this runtime; pnpm shim skipped." >&2
+		echo "    NOTE: 'dsh plugin' needs pnpm on PATH — upgrade the runtime to get it." >&2
+	fi
 }
 
-# termux_pkg_node_installed — true when a Termux pkg-owned Node is present
-# (dpkg is pkg's backend; both nodejs and nodejs-lts provide bionic
-# node/npm/npx in $PREFIX/bin). Only dpkg-owned installs ever qualify for the
-# uninstall prompt: a bare $PREFIX/bin/node of unknown origin is not something
-# this repo may remove.
+# termux_pkg_node_packages — print the pkg-owned packages that provide their
+# own bionic node/npm, one per line, in a fixed order. Empty output = none.
+#
+# dpkg is pkg's backend, so only dpkg-owned installs qualify: a bare
+# $PREFIX/bin/node of unknown origin is not something this repo may remove.
+# npm and pnpm are separate Termux packages here — they shadow the glibc
+# shims just as nodejs does, so they are offered for removal too.
+termux_pkg_node_packages() {
+	command -v dpkg >/dev/null 2>&1 || return 0
+	local p
+	for p in nodejs nodejs-lts npm pnpm; do
+		dpkg -s "$p" >/dev/null 2>&1 && echo "$p"
+	done
+}
+
+# termux_pkg_node_installed — true when any of the above is present.
 termux_pkg_node_installed() {
-  command -v dpkg >/dev/null 2>&1 || return 1
-  dpkg -s nodejs >/dev/null 2>&1 && return 0
-  dpkg -s nodejs-lts >/dev/null 2>&1 && return 0
-  return 1
+	[ -n "$(termux_pkg_node_packages)" ]
+}
+
+# ensure_bin_dir_on_path <bin_dir> — prepend <bin_dir> to PATH in ~/.bashrc,
+# once, inside a tagged block. The tag both makes this idempotent and lets a
+# reader (or a test) find the line later. Asked interactively; -y accepts.
+ensure_bin_dir_on_path() {
+	local bin_dir="$1" bashrc="$HOME/.bashrc" tag="# dsh-termux"
+	if grep -qF "$tag" "$bashrc" 2>/dev/null; then
+		echo "    ~/.bashrc already tagged with $tag; leaving it unchanged."
+		return 0
+	fi
+	if ! ask_yes_no "Add '$bin_dir' to PATH in ~/.bashrc (tagged $tag)?"; then
+		echo "    Skipped PATH setup (run the tools as '$bin_dir/<name>')."
+		return 0
+	fi
+	printf '\n%s\n# Prepend dsh-termux bin dir so the dsh wrapper and the glibc\n# node/npm shims resolve here.\nexport PATH="%s:$PATH"\n' \
+		"$tag" "$bin_dir" >>"$bashrc"
+	echo "    Appended to $bashrc (tagged $tag):"
+	echo "      export PATH=\"$bin_dir:\$PATH\""
 }
 
 # register_node_shims <bin_dir> <node_root>
 # Install-time entry: surface the conflict with a Termux pkg Node FIRST —
-# both provide node/npm/npx, and our shims win in every shell that sources
+# both provide node/npm, and our shims win in every shell that sources
 # ~/.bashrc because the install prepends <bin_dir> — then write the shims.
 # Two deliberate guards:
 #   - `uname -o` must say Android, so the question can never fire on a
@@ -494,26 +650,26 @@ termux_pkg_node_installed() {
 #   - the uninstall prompt DEFAULTS TO NO, so even -y (auto-accept) never
 #     removes a system package — declining just keeps both, with a warning.
 register_node_shims() {
-  local bin_dir="$1" node_root="$2" pkgs=""
-  if [ "$(uname -o 2>/dev/null || true)" = "Android" ] && termux_pkg_node_installed; then
-    if dpkg -s nodejs >/dev/null 2>&1; then pkgs="nodejs"; fi
-    if dpkg -s nodejs-lts >/dev/null 2>&1; then pkgs="${pkgs:+$pkgs }nodejs-lts"; fi
-    echo "==> Termux pkg Node detected: $pkgs (bionic node/npm/npx in \$PREFIX/bin)"
-    if ask_yes_no "Uninstall them so the glibc shims are unambiguous?" no; then
-      if command -v pkg >/dev/null 2>&1; then
-        # shellcheck disable=SC2086  # $pkgs is a list: "nodejs nodejs-lts"
-        pkg uninstall -y $pkgs \
-          || echo "!! pkg uninstall failed; Termux Node kept (the shims will shadow it)." >&2
-      else
-        echo "!! pkg not found; nothing removed. Termux Node kept (the shims will shadow it)." >&2
-      fi
-    else
-      echo "    Termux Node kept. NOTE: the glibc shims in $bin_dir shadow it in"
-      echo "    every shell that sources ~/.bashrc (the dsh-termux PATH line)."
-    fi
-  fi
-  echo "==> Registering node/npm/npx/pnpm shims (as bundled) into $bin_dir"
-  write_node_shims "$bin_dir" "$node_root"
+	local bin_dir="$1" node_root="$2" pkgs
+	pkgs="$(termux_pkg_node_packages | tr '\n' ' ')"
+	pkgs="${pkgs% }"
+	if [ "$(uname -o 2>/dev/null || true)" = "Android" ] && [ -n "$pkgs" ]; then
+		echo "==> Termux pkg Node stack detected: $pkgs (bionic node/npm in \$PREFIX/bin)"
+		if ask_yes_no "Uninstall them so the glibc shims are unambiguous?" no; then
+			if command -v pkg >/dev/null 2>&1; then
+				# shellcheck disable=SC2086  # $pkgs is a list: "nodejs nodejs-lts npm"
+				pkg uninstall -y $pkgs ||
+					echo "!! pkg uninstall failed; Termux Node kept (the shims will shadow it)." >&2
+			else
+				echo "!! pkg not found; nothing removed. Termux Node kept (the shims will shadow it)." >&2
+			fi
+		else
+			echo "    Termux Node stack kept. NOTE: the glibc shims in $bin_dir shadow it"
+			echo "    in every shell that sources ~/.bashrc (the dsh-termux PATH line)."
+		fi
+	fi
+	echo "==> Registering node/npm/npx/pnpm shims (as bundled) into $bin_dir"
+	write_node_shims "$bin_dir" "$node_root"
 }
 
 # native_prebuild_entries — 原生依赖注册表: "包名:构建后必须存在的产物"。
@@ -522,7 +678,7 @@ register_node_shims() {
 DSH_NATIVE_REPO="${DSH_NATIVE_REPO:-ErEbusE/dsh-termux}"
 
 native_prebuild_entries() {
-  cat <<'NATIVE_EOF'
+	cat <<'NATIVE_EOF'
 fs-ext:build/Release/fs_ext.node
 NATIVE_EOF
 }
@@ -536,69 +692,69 @@ NATIVE_EOF
 # 只应在**有工具链**的机器上调用 (CI runner / release 构建); Termux 设备没有
 # glibc gcc, 设备侧的二进制来自发布物 (ensure_native_prebuilds)。
 build_native_addons() {
-  local work_dir="$1" node_bin="$2" npm_cli="$3" entry pkg artifact pkg_dir
-  while IFS= read -r entry; do
-    [ -n "$entry" ] || continue
-    IFS=: read -r pkg artifact <<<"$entry"
-    pkg_dir="$work_dir/node_modules/$pkg"
-    if [ ! -f "$pkg_dir/package.json" ]; then
-      echo "    -- $pkg: this dsh build does not use it; skipped"
-      continue
-    fi
-    if [ -f "$pkg_dir/$artifact" ]; then
-      echo "    -- $pkg already carries $artifact; skipped"
-      continue
-    fi
-    echo "    building $pkg (node-gyp: python3/make/g++ must be on PATH)..."
-    # npm rebuild 在「当前目录的项目」里找包 —— 调用方未必 cd 进过 work_dir
-    # (patch-check 就没有), 在仓库根上它会"成功地重建 0 个包"并返回 0, 再靠
-    # 下面的产物断言兜住。这里显式进 work_dir, 重建的必然是目标树。
-    # npm_cli 有两种形态: npm-cli.js 路径 (经 node 执行, build-runtime 的用法)
-    # 或 PATH 上的 npm 命令 (composite action 的默认)。按形态分派, 否则
-    # `node npm rebuild` 会把 npm 当脚本路径, 报 MODULE_NOT_FOUND。
-    if [ "${npm_cli%.js}" != "$npm_cli" ]; then
-      npm_invoke=("$node_bin" "$npm_cli")
-    else
-      npm_invoke=("$npm_cli")
-    fi
-    if ! ( cd "$work_dir" && "${npm_invoke[@]}" rebuild --foreground-scripts "$pkg" ); then
-      echo "!! npm rebuild $pkg failed — the runtime would not boot without it." >&2
-      return 1
-    fi
-    if [ ! -f "$pkg_dir/$artifact" ]; then
-      echo "!! $pkg built no $artifact (install script ran but produced nothing?)" >&2
-      return 1
-    fi
-    # 真装载自检: 用将要在设备上跑它的同一个 node require 一遍。构建产物存在
-    # 但 ABI/平台不符时, 只有这一步能当场抓住。
-    if ! ( cd "$work_dir" && "$node_bin" -e "require('$pkg')" ); then
-      echo "!! $pkg cannot be loaded by $node_bin (ABI/platform mismatch?)" >&2
-      return 1
-    fi
-    echo "    built & loaded: $pkg -> $artifact"
-  done < <(native_prebuild_entries)
+	local work_dir="$1" node_bin="$2" npm_cli="$3" entry pkg artifact pkg_dir
+	while IFS= read -r entry; do
+		[ -n "$entry" ] || continue
+		IFS=: read -r pkg artifact <<<"$entry"
+		pkg_dir="$work_dir/node_modules/$pkg"
+		if [ ! -f "$pkg_dir/package.json" ]; then
+			echo "    -- $pkg: this dsh build does not use it; skipped"
+			continue
+		fi
+		if [ -f "$pkg_dir/$artifact" ]; then
+			echo "    -- $pkg already carries $artifact; skipped"
+			continue
+		fi
+		echo "    building $pkg (node-gyp: python3/make/g++ must be on PATH)..."
+		# npm rebuild 在「当前目录的项目」里找包 —— 调用方未必 cd 进过 work_dir
+		# (patch-check 就没有), 在仓库根上它会"成功地重建 0 个包"并返回 0, 再靠
+		# 下面的产物断言兜住。这里显式进 work_dir, 重建的必然是目标树。
+		# npm_cli 有两种形态: npm-cli.js 路径 (经 node 执行, build-runtime 的用法)
+		# 或 PATH 上的 npm 命令 (composite action 的默认)。按形态分派, 否则
+		# `node npm rebuild` 会把 npm 当脚本路径, 报 MODULE_NOT_FOUND。
+		if [ "${npm_cli%.js}" != "$npm_cli" ]; then
+			npm_invoke=("$node_bin" "$npm_cli")
+		else
+			npm_invoke=("$npm_cli")
+		fi
+		if ! (cd "$work_dir" && "${npm_invoke[@]}" rebuild --foreground-scripts "$pkg"); then
+			echo "!! npm rebuild $pkg failed — the runtime would not boot without it." >&2
+			return 1
+		fi
+		if [ ! -f "$pkg_dir/$artifact" ]; then
+			echo "!! $pkg built no $artifact (install script ran but produced nothing?)" >&2
+			return 1
+		fi
+		# 真装载自检: 用将要在设备上跑它的同一个 node require 一遍。构建产物存在
+		# 但 ABI/平台不符时, 只有这一步能当场抓住。
+		if ! (cd "$work_dir" && "$node_bin" -e "require('$pkg')"); then
+			echo "!! $pkg cannot be loaded by $node_bin (ABI/platform mismatch?)" >&2
+			return 1
+		fi
+		echo "    built & loaded: $pkg -> $artifact"
+	done < <(native_prebuild_entries)
 }
 
 # verify_native_prebuilds <work_dir> <node_bin>
 # 断言: 注册表里每个**已安装**的原生依赖, 其产物必须在场且能被该 node 装载。
 # 消费方: r2 (shipped tarball 的发布物断言) 与 ensure_native_prebuilds (overlay 之后)。
 verify_native_prebuilds() {
-  local work_dir="$1" node_bin="$2" entry pkg artifact pkg_dir
-  while IFS= read -r entry; do
-    [ -n "$entry" ] || continue
-    IFS=: read -r pkg artifact <<<"$entry"
-    pkg_dir="$work_dir/node_modules/$pkg"
-    [ -f "$pkg_dir/package.json" ] || continue          # 该 dsh 版本不用它
-    if [ ! -f "$pkg_dir/$artifact" ]; then
-      echo "!! $pkg is installed but $artifact is missing (native addon never built?)" >&2
-      return 1
-    fi
-    if ! ( cd "$work_dir" && "$node_bin" -e "require('$pkg')" ); then
-      echo "!! $pkg cannot be loaded by $node_bin (ABI/platform mismatch?)" >&2
-      return 1
-    fi
-    echo "    OK native addon loads: $pkg -> $artifact"
-  done < <(native_prebuild_entries)
+	local work_dir="$1" node_bin="$2" entry pkg artifact pkg_dir
+	while IFS= read -r entry; do
+		[ -n "$entry" ] || continue
+		IFS=: read -r pkg artifact <<<"$entry"
+		pkg_dir="$work_dir/node_modules/$pkg"
+		[ -f "$pkg_dir/package.json" ] || continue # 该 dsh 版本不用它
+		if [ ! -f "$pkg_dir/$artifact" ]; then
+			echo "!! $pkg is installed but $artifact is missing (native addon never built?)" >&2
+			return 1
+		fi
+		if ! (cd "$work_dir" && "$node_bin" -e "require('$pkg')"); then
+			echo "!! $pkg cannot be loaded by $node_bin (ABI/platform mismatch?)" >&2
+			return 1
+		fi
+		echo "    OK native addon loads: $pkg -> $artifact"
+	done < <(native_prebuild_entries)
 }
 
 # package_native_prebuilds <work_dir> <node_bin> <out_path>
@@ -606,8 +762,8 @@ verify_native_prebuilds() {
 # 与各包版本, 设备侧 overlay 用它核对身份)。一个原生件都没有时输出空串、不产文件
 # —— 调用方据空串跳过发布。
 package_native_prebuilds() {
-  local work_dir="$1" node_bin="$2" out="$3"
-  NATIVE_ENTRIES="$(native_prebuild_entries)" NATIVE_OUT="$out" "$node_bin" -e '
+	local work_dir="$1" node_bin="$2" out="$3"
+	NATIVE_ENTRIES="$(native_prebuild_entries)" NATIVE_OUT="$out" "$node_bin" -e '
     const fs = require("fs"), path = require("path");
     const root = process.argv[1];
     const entries = process.env.NATIVE_ENTRIES.split("\n").filter(Boolean).map(l => {
@@ -638,18 +794,21 @@ package_native_prebuilds() {
 # 该 dsh 版本不需要原生件 (如 0.1.2) 时静默跳过; 需要却没有任何 release 发布过
 # 时响亮失败 —— 安静跳过等于把启动失败留给用户在 dsh web 上撞见。
 ensure_native_prebuilds() {
-  local work_dir="$1" node_bin="$2" dsh_version="$3"
-  local entry pkg artifact pkg_dir need=0
-  while IFS= read -r entry; do
-    IFS=: read -r pkg artifact <<<"$entry"
-    [ -f "$work_dir/node_modules/$pkg/package.json" ] || continue
-    [ -f "$work_dir/node_modules/$pkg/$artifact" ] || need=1
-  done < <(native_prebuild_entries)
-  [ "$need" = 1 ] || { echo "    -- no native addons required by this dsh build"; return 0; }
-  echo "    resolving the release that shipped dsh $dsh_version (for prebuilt natives)..."
-  local api="https://api.github.com/repos/$DSH_NATIVE_REPO/releases?per_page=100"
-  local tag
-  tag="$("$node_bin" -e '
+	local work_dir="$1" node_bin="$2" dsh_version="$3"
+	local entry pkg artifact pkg_dir need=0
+	while IFS= read -r entry; do
+		IFS=: read -r pkg artifact <<<"$entry"
+		[ -f "$work_dir/node_modules/$pkg/package.json" ] || continue
+		[ -f "$work_dir/node_modules/$pkg/$artifact" ] || need=1
+	done < <(native_prebuild_entries)
+	[ "$need" = 1 ] || {
+		echo "    -- no native addons required by this dsh build"
+		return 0
+	}
+	echo "    resolving the release that shipped dsh $dsh_version (for prebuilt natives)..."
+	local api="https://api.github.com/repos/$DSH_NATIVE_REPO/releases?per_page=100"
+	local tag
+	tag="$("$node_bin" -e '
     let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
       try {
         const rels=JSON.parse(d);
@@ -657,33 +816,56 @@ ensure_native_prebuilds() {
         if(!hit) process.exit(3);
         console.log(hit.tag_name);
       } catch(e) { process.exit(4); }
-    });' "$dsh_version" <<< "$(curl -fsSL --max-time 40 "$api" 2>/dev/null)" )" || {
-    echo "!! no release carries prebuilt natives for dsh $dsh_version" >&2
-    echo "   (offline, or the release has not been published yet). Install this" >&2
-    echo "   dsh from its release tarball instead: install.sh ships the binary." >&2
-    return 1
-  }
-  echo "    fetching dsh-termux-natives.tar.gz from $tag ..."
-  local tmp; tmp="$(mktemp -d "$(dirname "$work_dir")/.natives.XXXXXXXX")"     || return 1
-  if ! dsh_fetch --gzip --max-time 120 \
-      "https://github.com/$DSH_NATIVE_REPO/releases/download/$tag/dsh-termux-natives.tar.gz" \
-      "$tmp/natives.tgz"; then
-    echo "!! natives asset missing or broken at $tag" >&2
-    rm -rf "$tmp"; return 1
-  fi
-  tar xzf "$tmp/natives.tgz" -C "$work_dir/node_modules"     || { echo "!! natives extraction failed" >&2; rm -rf "$tmp"; return 1; }
-  rm -rf "$tmp"
-  # 资产身份核对: manifest 里的 fs-ext 版本必须与刚装进树里的一致 —— 二进制是
-  # 对着特定包版本编的, 版本错位时宁可响亮失败也不让 dsh web 在启动时撞 ABI。
-  local manifest="$work_dir/node_modules/native-manifest.json" want got
-  if [ -f "$manifest" ]; then
-    want="$("$node_bin" -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).packages["fs-ext"]||"")' "$manifest")"
-    got="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'       "$work_dir/node_modules/fs-ext/package.json" | head -1)"
-    if [ -n "$want" ] && [ "$want" != "$got" ]; then
-      echo "!! natives asset was built for fs-ext $want, but the tree has $got" >&2
-      echo "   (asset/release mismatch — fetch the natives that match this dsh)" >&2
-      return 1
-    fi
-  fi
-  verify_native_prebuilds "$work_dir" "$node_bin"
+    });' "$dsh_version" <<<"$(curl -fsSL --max-time 40 "$api" 2>/dev/null)")" || {
+		echo "!! no release carries prebuilt natives for dsh $dsh_version" >&2
+		echo "   (offline, or the release has not been published yet). Install this" >&2
+		echo "   dsh from its release tarball instead: install.sh ships the binary." >&2
+		return 1
+	}
+	echo "    fetching dsh-termux-natives.tar.gz from $tag ..."
+	local tmp
+	tmp="$(mktemp -d "$(dirname "$work_dir")/.natives.XXXXXXXX")" || return 1
+	if ! dsh_fetch --gzip --max-time 120 \
+		"https://github.com/$DSH_NATIVE_REPO/releases/download/$tag/dsh-termux-natives.tar.gz" \
+		"$tmp/natives.tgz"; then
+		echo "!! natives asset missing or broken at $tag" >&2
+		rm -rf "$tmp"
+		return 1
+	fi
+	tar xzf "$tmp/natives.tgz" -C "$work_dir/node_modules" || {
+		echo "!! natives extraction failed" >&2
+		rm -rf "$tmp"
+		return 1
+	}
+	rm -rf "$tmp"
+	# 资产身份核对: manifest 里的 fs-ext 版本必须与刚装进树里的一致 —— 二进制是
+	# 对着特定包版本编的, 版本错位时宁可响亮失败也不让 dsh web 在启动时撞 ABI。
+	local manifest="$work_dir/node_modules/native-manifest.json" want got
+	if [ -f "$manifest" ]; then
+		# node 大版本必须与构建原生件时的一致: NODE_VERSION 跟随 active LTS 线,
+		# 这条线换代后, 从旧 release 取的二进制可能与设备上的 node 差一个大版本
+		# (NODE_MODULE_VERSION 不同), require 会以 ABI 错误失败。这里先给出人话。
+		local built_node built_major cur_major
+		built_node="$("$node_bin" -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).node||"")' "$manifest")"
+		if [ -n "$built_node" ]; then
+			built_major="$(printf '%s' "${built_node#v}" | cut -d. -f1)"
+			cur_major="$("$node_bin" -p 'process.versions.node.split(".")[0]')"
+			if [ -n "$built_major" ] && [ "$built_major" != "$cur_major" ]; then
+				echo "!! natives were built with Node $built_node, but this runtime runs Node $cur_major.x" >&2
+				echo "   (ABI mismatch: the addon cannot load). NODE_VERSION follows the active" >&2
+				echo "   LTS line, which can move ahead of the release that shipped these binaries." >&2
+				echo "   Install this dsh from its own release tarball instead — install.sh ships" >&2
+				echo "   node + natives as one matching package." >&2
+				return 1
+			fi
+		fi
+		want="$("$node_bin" -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).packages["fs-ext"]||"")' "$manifest")"
+		got="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$work_dir/node_modules/fs-ext/package.json" | head -1)"
+		if [ -n "$want" ] && [ "$want" != "$got" ]; then
+			echo "!! natives asset was built for fs-ext $want, but the tree has $got" >&2
+			echo "   (asset/release mismatch — fetch the natives that match this dsh)" >&2
+			return 1
+		fi
+	fi
+	verify_native_prebuilds "$work_dir" "$node_bin"
 }

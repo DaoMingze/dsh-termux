@@ -252,6 +252,8 @@ jobs:
             || { echo "FAIL: install.sh does not call configure_glibc_node"; exit 1; }
           grep -qF 'write_dsh_wrapper "$WRAPPER" "$NODE_BIN" "$DSH_BIN"' build/install.sh \
             || { echo "FAIL: install.sh does not call write_dsh_wrapper"; exit 1; }
+          grep -qF 'ensure_bin_dir_on_path "$BIN_DIR"' build/install.sh \
+            || { echo "FAIL: install.sh does not call ensure_bin_dir_on_path"; exit 1; }
           # Function definitions, heredocs and the interpreter patch live in
           # scripts/common.sh only — none of these may appear in install.sh.
           for sig in 'configure_glibc_node()' 'write_dsh_wrapper()' 'write_dsh_opener()' \

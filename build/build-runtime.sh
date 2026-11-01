@@ -18,6 +18,7 @@
 # Usage:
 #   bash build/build-runtime.sh                        # defaults
 #   DSH_NODE_VERSION=24.19.0 bash build/build-runtime.sh   # default: NODE_VERSION file
+#       (accepts lts | a bare major | an exact X.Y.Z, same as scripts/01)
 #   DSH_DSH_VERSION=@deepseek-ai/dsh@next bash build/build-runtime.sh
 #
 # Env:
@@ -34,11 +35,24 @@ set -euo pipefail
 BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PATCHES="$BASE_DIR/patches"
 source "$BASE_DIR/scripts/patch-lib.sh"
+# common.sh owns resolve_node_version — the same resolver 01 runs on the device,
+# so "lts" cannot mean two different things on the two sides of this project.
+source "$BASE_DIR/scripts/common.sh"
 
 RUNTIME_DIR="${DSH_RUNTIME_DIR:-$BASE_DIR/dsh-termux-runtime}"
 # Node 版本单一事实源: 仓库根 NODE_VERSION 文件 (DSH_NODE_VERSION 仍可覆盖)。
-NODE_VERSION="${DSH_NODE_VERSION:-$(tr -d '[:space:]' < "$BASE_DIR/NODE_VERSION" 2>/dev/null || true)}"
-[ -n "$NODE_VERSION" ] || { echo "!! NODE_VERSION file missing/empty at $BASE_DIR/NODE_VERSION" >&2; exit 1; }
+# 内容可以是 lts (active LTS 线)、裸大版本 (24) 或精确版本 (24.19.0);
+# 三者都在这里解析成具体的 X.Y.Z, 因为下面要按版本号拼下载 URL。
+NODE_SPEC="${DSH_NODE_VERSION:-$(tr -d '[:space:]' <"$BASE_DIR/NODE_VERSION" 2>/dev/null || true)}"
+[ -n "$NODE_SPEC" ] || {
+	echo "!! NODE_VERSION file missing/empty at $BASE_DIR/NODE_VERSION" >&2
+	exit 1
+}
+NODE_VERSION="$(resolve_node_version "$NODE_SPEC")" ||
+	{
+		echo "!! cannot resolve the Node version from '$NODE_SPEC'" >&2
+		exit 1
+	}
 DSH_VERSION="${DSH_DSH_VERSION:-@deepseek-ai/dsh@latest}"
 PNPM_SPEC="${DSH_PNPM_VERSION:-pnpm@10}"
 SOURCE_TREE="${DSH_SOURCE_TREE:-}"
@@ -50,43 +64,43 @@ TARBALL="node-v${NODE_VERSION}-linux-arm64"
 
 ARCH="$(uname -m)"
 if [ "$ARCH" != "aarch64" ] && [ "$ARCH" != "arm64" ]; then
-  echo "!! build-runtime.sh must run on arm64 (got $ARCH)." >&2
-  exit 1
+	echo "!! build-runtime.sh must run on arm64 (got $ARCH)." >&2
+	exit 1
 fi
 
 echo "==> [build] dsh-termux runtime build"
 echo "    runtime dir : $RUNTIME_DIR"
 echo "    node version: $NODE_VERSION"
 if [ -n "$SOURCE_TREE" ]; then
-  echo "    dsh source  : $SOURCE_TREE (packed tarballs, not npm)"
+	echo "    dsh source  : $SOURCE_TREE (packed tarballs, not npm)"
 else
-  echo "    dsh version : $DSH_VERSION"
+	echo "    dsh version : $DSH_VERSION"
 fi
 echo "    arch        : $ARCH"
 
 # --- 1. Node ----------------------------------------------------------------
 fetch_node() {
-  local dl="$RUNTIME_DIR/downloads"
-  mkdir -p "$dl"
-  echo "==> Downloading Node.js ${NODE_VERSION} (linux-arm64) ..."
-  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.tar.xz" \
-    -o "$dl/${TARBALL}.tar.xz"
-  rm -rf "${NODE_ROOT:?}" "${dl:?}/${TARBALL:?}"
-  mkdir -p "$NODE_ROOT"
-  tar -xJf "$dl/${TARBALL}.tar.xz" -C "$dl"
-  mv "$dl/${TARBALL}"/* "$NODE_ROOT/"
-  rm -rf "${dl:?}/${TARBALL:?}"
+	local dl="$RUNTIME_DIR/downloads"
+	mkdir -p "$dl"
+	echo "==> Downloading Node.js ${NODE_VERSION} (linux-arm64) ..."
+	curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.tar.xz" \
+		-o "$dl/${TARBALL}.tar.xz"
+	rm -rf "${NODE_ROOT:?}" "${dl:?}/${TARBALL:?}"
+	mkdir -p "$NODE_ROOT"
+	tar -xJf "$dl/${TARBALL}.tar.xz" -C "$dl"
+	mv "$dl/${TARBALL}"/* "$NODE_ROOT/"
+	rm -rf "${dl:?}/${TARBALL:?}"
 }
 
 installed_ver=""
 if [ -x "$NODE_BIN" ]; then
-  installed_ver="$("$NODE_BIN" --version 2>/dev/null || true)"
+	installed_ver="$("$NODE_BIN" --version 2>/dev/null || true)"
 fi
 if [ -n "$installed_ver" ] && [[ "$installed_ver" == *"v${NODE_VERSION}"* ]]; then
-  echo "    Node.js $installed_ver already present."
+	echo "    Node.js $installed_ver already present."
 else
-  echo "    Node: ${installed_ver:-none} -> fetching v${NODE_VERSION}"
-  fetch_node
+	echo "    Node: ${installed_ver:-none} -> fetching v${NODE_VERSION}"
+	fetch_node
 fi
 NODE_BIN="$NODE_ROOT/bin/node"
 
@@ -94,7 +108,7 @@ NODE_BIN="$NODE_ROOT/bin/node"
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 if [ ! -f package.json ]; then
-  "$NODE_BIN" "$NODE_ROOT/lib/node_modules/npm/bin/npm-cli.js" init -y >/dev/null 2>&1
+	"$NODE_BIN" "$NODE_ROOT/lib/node_modules/npm/bin/npm-cli.js" init -y >/dev/null 2>&1
 fi
 # npm's arborist OOMs at the ~2GB default V8 heap when resolving dsh's
 # ~60-dependency tree on arm64 hosts (verified on-device); give it 4GB.
@@ -113,13 +127,16 @@ NPM_CLI="$NODE_ROOT/lib/node_modules/npm/bin/npm-cli.js"
 # is versioned and released independently of dsh (0.1.1 while dsh is 0.1.2-*),
 # so npm resolves it like any other external dependency.
 stage_from_source() {
-  local tree="$1" dir count
-  local -a dirs=()
-  for dir in "$tree/dist/npm" "$tree/dist/npm-vendor"; do
-    [ -d "$dir" ] || { echo "!! source build produced no $dir — run release:pack first" >&2; return 1; }
-    dirs+=("$dir")
-  done
-  count="$("$NODE_BIN" -e '
+	local tree="$1" dir count
+	local -a dirs=()
+	for dir in "$tree/dist/npm" "$tree/dist/npm-vendor"; do
+		[ -d "$dir" ] || {
+			echo "!! source build produced no $dir — run release:pack first" >&2
+			return 1
+		}
+		dirs+=("$dir")
+	done
+	count="$("$NODE_BIN" -e '
     const fs = require("node:fs"), path = require("node:path");
     const dirs = process.argv.slice(1);
     const deps = {};
@@ -141,16 +158,16 @@ stage_from_source() {
     fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
     console.log(Object.keys(deps).length);
   ' "${dirs[@]}")" || return 1
-  echo "    staged $count packed packages as file: dependencies"
+	echo "    staged $count packed packages as file: dependencies"
 }
 
 if [ -n "$SOURCE_TREE" ]; then
-  echo "==> Installing dsh FROM SOURCE ($SOURCE_TREE) ..."
-  stage_from_source "$SOURCE_TREE" || exit 1
-  "$NODE_BIN" "$NPM_CLI" install --ignore-scripts
+	echo "==> Installing dsh FROM SOURCE ($SOURCE_TREE) ..."
+	stage_from_source "$SOURCE_TREE" || exit 1
+	"$NODE_BIN" "$NPM_CLI" install --ignore-scripts
 else
-  echo "==> Installing ${DSH_VERSION} (--ignore-scripts) ..."
-  "$NODE_BIN" "$NPM_CLI" install "$DSH_VERSION" --ignore-scripts
+	echo "==> Installing ${DSH_VERSION} (--ignore-scripts) ..."
+	"$NODE_BIN" "$NPM_CLI" install "$DSH_VERSION" --ignore-scripts
 fi
 
 # --- 2b. pnpm ----------------------------------------------------------------
@@ -167,10 +184,10 @@ echo "==> Installing pnpm ($PNPM_SPEC) into the runtime Node ..."
 "$NODE_BIN" "$NPM_CLI" install -g "$PNPM_SPEC"
 PNPM_JS="$NODE_ROOT/lib/node_modules/pnpm/bin/pnpm.cjs"
 if [ ! -f "$PNPM_JS" ]; then
-  echo "!! pnpm entry not found at $PNPM_JS — pnpm layout changed? Pin a" >&2
-  echo "   version whose layout still matches (DSH_PNPM_VERSION) and check" >&2
-  echo "   scripts/common.sh write_node_shims." >&2
-  exit 1
+	echo "!! pnpm entry not found at $PNPM_JS — pnpm layout changed? Pin a" >&2
+	echo "   version whose layout still matches (DSH_PNPM_VERSION) and check" >&2
+	echo "   scripts/common.sh write_node_shims." >&2
+	exit 1
 fi
 
 # --- 3. Apply patches -------------------------------------------------------
@@ -180,9 +197,9 @@ fi
 # handles the prefix and verifies each file really changed.
 echo "==> Applying Android patches (DSH_PATCH_SET)"
 if ! dsh_apply_patch_set "$WORK_DIR" "$PATCHES"; then
-  echo "!! Patches do not apply to the installed dsh version; aborting build." >&2
-  echo "   Regenerate them from the npm packages — see PATCHES.md." >&2
-  exit 1
+	echo "!! Patches do not apply to the installed dsh version; aborting build." >&2
+	echo "   Regenerate them from the npm packages — see PATCHES.md." >&2
+	exit 1
 fi
 
 # --- 3b. Build native addons that ship no prebuilds --------------------------
@@ -192,7 +209,6 @@ fi
 # upstream tree, not in work/). The runner has the toolchain; a Termux device
 # does not (no glibc gcc), so this is where the binary must come from — the
 # tarball ships it from here on.
-source "$BASE_DIR/scripts/common.sh"
 echo "==> Building native addons without prebuilds"
 build_native_addons "$WORK_DIR" "$NODE_BIN" "$NPM_CLI"
 # 不在这里打包 natives 资产: tarball 本身整体携带 work/ (含二进制), 而发布用的

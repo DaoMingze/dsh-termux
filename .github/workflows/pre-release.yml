@@ -136,7 +136,12 @@ jobs:
           set -euo pipefail
           sha="$(git -C upstream rev-parse --short=7 HEAD)"
           ver="$(node -p "require('./upstream/package.json').version")"
-          pv="$(tr -d '[:space:]' < VERSION)"
+          # Project VERSION is derived (the repo VERSION file was retired):
+          # take the trailing segment of the latest STABLE release tag.
+          # /releases/latest excludes prereleases by definition, so the pre-*
+          # tags this very workflow publishes can never leak back in.
+          pv="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" -q .tag_name | sed 's/.*-//')"
+          [ -n "$pv" ] || { echo "!! cannot derive the project VERSION from the latest stable release of ${GITHUB_REPOSITORY}" >&2; exit 1; }
           tag="pre-dsh-${ver}-g${sha}-${pv}"
           case "$tag" in
             *[!A-Za-z0-9._-]*) echo "!! computed tag '$tag' has illegal characters"; exit 1 ;;
@@ -166,7 +171,9 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.gate.outputs.build == '1'
         with:
-          node-version-file: NODE_VERSION
+          # 主机 node (setup-node 不认裸 "lts"); 运行时 node 由 build-runtime.sh
+          # 经 NODE_VERSION 文件解析。
+          node-version: lts/*
           package-manager-cache: false
 
       - name: Install pnpm (the version upstream pins)
@@ -232,7 +239,7 @@ jobs:
           mkdir -p "$RT/scripts"
           cp scripts/update-dsh.sh scripts/common.sh scripts/patch-lib.sh "$RT/scripts/"
           cp -r patches "$RT/patches"
-          cp VERSION "$RT/VERSION"
+          printf '%s\n' "$pv" > "$RT/VERSION"
           # The natives build above runs node-gyp in-place, and node-gyp links
           # build/Release/<mod>.node hard to build/Release/obj.target/<mod>.node.
           # Tar stores that pair as a hard-link entry, and Android denies
@@ -321,7 +328,7 @@ jobs:
 
             - upstream ref: `${{ steps.target.outputs.ref }}` -> `${{ steps.id.outputs.sha }}`
             - dsh version: **${{ steps.id.outputs.ver }}** (built from source)
-            - project version: **${{ steps.id.outputs.pv }}** (`VERSION`)
+            - project version: **${{ steps.id.outputs.pv }}** (derived from the latest stable release tag)
             - all Android patches from `DSH_PATCH_SET` applied and verified
             - assets: runtime tarball + `install.sh` only — deliberately no `dsh-termux-patches.tar.gz`, so `dsh update --self` keeps refreshing from the stable channel
 

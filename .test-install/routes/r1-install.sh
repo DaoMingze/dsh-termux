@@ -16,9 +16,12 @@ sandbox_init run
 
 echo "=== 1. 工作区 install.sh × 基线 tarball ==="
 bash build/install.sh -y \
-  -p "$TARBALL" \
-  --prefix "$ROOT/prefix" --bin "$ROOT/bin" >"$ROOT/install.log" 2>&1 \
-  || { cat "$ROOT/install.log"; fail "install.sh exited non-zero"; }
+	-p "$TARBALL" \
+	--prefix "$ROOT/prefix" --bin "$ROOT/bin" >"$ROOT/install.log" 2>&1 ||
+	{
+		cat "$ROOT/install.log"
+		fail "install.sh exited non-zero"
+	}
 ok "install.sh exit 0"
 
 echo "=== 1b. 覆盖重装 (升级者真实路径: 旧 runtime 残留必须清空) ==="
@@ -29,30 +32,33 @@ echo "=== 1b. 覆盖重装 (升级者真实路径: 旧 runtime 残留必须清�
 # undefined"。此处复刻该场景做回归。
 STALE_NESTED="$ROOT/prefix/node/lib/node_modules/npm/node_modules/minipass-flush/node_modules/minipass"
 mkdir -p "$STALE_NESTED"
-printf '{"name":"minipass","version":"3.3.6","main":"index.js"}\n' > "$STALE_NESTED/package.json"
-printf 'module.exports = function Minipass () {}\n' > "$STALE_NESTED/index.js"
+printf '{"name":"minipass","version":"3.3.6","main":"index.js"}\n' >"$STALE_NESTED/package.json"
+printf 'module.exports = function Minipass () {}\n' >"$STALE_NESTED/index.js"
 STALE_ORPHAN="$ROOT/prefix/node/lib/node_modules/npm/lib/commands/hook.js"
 mkdir -p "$(dirname "$STALE_ORPHAN")"
-echo '// stale orphan from an old npm' > "$STALE_ORPHAN"
-echo 'user file, not owned by the tarball' > "$ROOT/prefix/keep-me.txt"
+echo '// stale orphan from an old npm' >"$STALE_ORPHAN"
+echo 'user file, not owned by the tarball' >"$ROOT/prefix/keep-me.txt"
 bash build/install.sh -y \
-  -p "$TARBALL" \
-  --prefix "$ROOT/prefix" --bin "$ROOT/bin" >"$ROOT/reinstall.log" 2>&1 \
-  || { cat "$ROOT/reinstall.log"; fail "覆盖重装 install.sh exited non-zero"; }
+	-p "$TARBALL" \
+	--prefix "$ROOT/prefix" --bin "$ROOT/bin" >"$ROOT/reinstall.log" 2>&1 ||
+	{
+		cat "$ROOT/reinstall.log"
+		fail "覆盖重装 install.sh exited non-zero"
+	}
 [ ! -e "$STALE_NESTED/package.json" ] || fail "覆盖重装后嵌套残留 minipass 仍在 (解包未清旧树)"
 [ ! -e "$STALE_ORPHAN" ] || fail "覆盖重装后孤儿文件仍在"
 [ -f "$ROOT/prefix/keep-me.txt" ] || fail "覆盖重装误删了非 tarball 成员文件"
 # 残留清空后, npm 启动必加载的缓存模块链必须能 require (正是真机崩溃链)
-"$NODE" -e "require('$ROOT/prefix/node/lib/node_modules/npm/node_modules/cacache/lib/content/write.js')" \
-  || fail "npm cacache 模块链加载失败 (minipass 影子残留?)"
+"$NODE" -e "require('$ROOT/prefix/node/lib/node_modules/npm/node_modules/cacache/lib/content/write.js')" ||
+	fail "npm cacache 模块链加载失败 (minipass 影子残留?)"
 ok "覆盖重装: 残留清空 + 非 tarball 文件保留 + npm cacache 链可加载"
 
 echo "=== 2. install.sh 不携带复制逻辑 (委托 common.sh) ==="
-for pat in 'configure_glibc_node()' 'write_dsh_wrapper()' 'write_dsh_opener()' 'DSH_OPENER=' 'DSH_WRAPPER_HEAD=' 'ask_yes_no()' 'write_node_shims()' '_emit_node_shim()' 'register_node_shims()' 'DSH_SHIM='; do
-  if grep -qF -- "$pat" build/install.sh; then fail "install.sh still contains $pat"; fi
+for pat in 'configure_glibc_node()' 'write_dsh_wrapper()' 'write_dsh_opener()' 'DSH_OPENER=' 'DSH_WRAPPER_HEAD=' 'ask_yes_no()' 'write_node_shims()' '_emit_node_shim()' 'register_node_shims()' 'ensure_bin_dir_on_path()' 'termux_pkg_node_packages()' 'resolve_node_version()' 'validate_profile_name()' 'DSH_SHIM='; do
+	if grep -qF -- "$pat" build/install.sh; then fail "install.sh still contains $pat"; fi
 done
 if grep -q -- '--set-interpreter' build/install.sh; then
-  fail "install.sh 仍提及 --set-interpreter (只允许出现在 common.sh)"
+	fail "install.sh 仍提及 --set-interpreter (只允许出现在 common.sh)"
 fi
 ok "无重复 helper 文本"
 
@@ -63,9 +69,9 @@ ok "node interpreter 是 glibc loader"
 VER="$("$NODE" --version 2>"$ROOT/node-err.log")"
 RC=$?
 if [ "$RC" -ne 0 ]; then
-  echo "--- 补丁后 node stderr (另存 sandbox-run/node-err.log) ---" >&2
-  cat "$ROOT/node-err.log" >&2
-  fail "补丁后的 node 无法运行 (exit $RC)"
+	echo "--- 补丁后 node stderr (另存 sandbox-run/node-err.log) ---" >&2
+	cat "$ROOT/node-err.log" >&2
+	fail "补丁后的 node 无法运行 (exit $RC)"
 fi
 ok "补丁后的 node 可直连运行 ($VER)"
 
@@ -98,8 +104,8 @@ echo "=== 6b. 工作区补丁集 overlay (serve.sh 起 web 前的同一动作、
 # 矩阵与 CI 全绿, 人类一跑 serve.sh 就被拒绝启动)。用同一个
 # sandbox-lib.sh:overlay_workspace_patches, 不另写一份标准; 它内部走生产入口
 # dsh_apply_patch_set, 含 precondition 跳过与 marker 验证。
-overlay_workspace_patches "$ROOT/prefix/work" \
-  || fail "工作区补丁集打不进基线种子树 (serve.sh 也会拒绝启动)"
+overlay_workspace_patches "$ROOT/prefix/work" ||
+	fail "工作区补丁集打不进基线种子树 (serve.sh 也会拒绝启动)"
 ok "工作区补丁集可 overlay 到本树 (含 marker 验证)"
 
 echo "=== 6c. node/npm/npx shims (glibc Node 直连短命令) ==="
@@ -107,18 +113,27 @@ echo "=== 6c. node/npm/npx shims (glibc Node 直连短命令) ==="
 # 写进 --bin 目录。断言: 齐备、带生成标记、三个都能直连运行 (npm/npx 走
 # node <npm-cli.js>, 等于顺带验证了 tarball 内 npm 的模块链可加载)。
 for s in node npm npx; do
-  [ -x "$ROOT/bin/$s" ] || fail "shim $s missing"
-  grep -qF '# dsh-termux node shim' "$ROOT/bin/$s" || fail "shim $s 缺少生成标记"
+	[ -x "$ROOT/bin/$s" ] || fail "shim $s missing"
+	grep -qF '# dsh-termux node shim' "$ROOT/bin/$s" || fail "shim $s 缺少生成标记"
 done
 ok "node/npm/npx shim 齐备且带标记"
-SVER="$("$ROOT/bin/node" --version 2>"$ROOT/shim-node-err.log")" \
-  || { cat "$ROOT/shim-node-err.log" >&2; fail "node shim 无法直连运行"; }
+SVER="$("$ROOT/bin/node" --version 2>"$ROOT/shim-node-err.log")" ||
+	{
+		cat "$ROOT/shim-node-err.log" >&2
+		fail "node shim 无法直连运行"
+	}
 ok "node shim 直连运行 ($SVER)"
-NPMVER="$("$ROOT/bin/npm" --version 2>"$ROOT/shim-npm-err.log")" \
-  || { cat "$ROOT/shim-npm-err.log" >&2; fail "npm shim 无法运行"; }
+NPMVER="$("$ROOT/bin/npm" --version 2>"$ROOT/shim-npm-err.log")" ||
+	{
+		cat "$ROOT/shim-npm-err.log" >&2
+		fail "npm shim 无法运行"
+	}
 ok "npm shim 运行 ($NPMVER)"
-NPXVER="$("$ROOT/bin/npx" --version 2>"$ROOT/shim-npx-err.log")" \
-  || { cat "$ROOT/shim-npx-err.log" >&2; fail "npx shim 无法运行"; }
+NPXVER="$("$ROOT/bin/npx" --version 2>"$ROOT/shim-npx-err.log")" ||
+	{
+		cat "$ROOT/shim-npx-err.log" >&2
+		fail "npx shim 无法运行"
+	}
 ok "npx shim 运行 ($NPXVER)"
 
 echo "=== 6d. pnpm (runtime 携带则强断言; 旧基线无则降级 WARN) ==="
@@ -129,13 +144,16 @@ echo "=== 6d. pnpm (runtime 携带则强断言; 旧基线无则降级 WARN) ==="
 # 为下面的强断言 (r5 的「tarball 携带 VERSION 时加跑 --self」同款条件式)。
 PNPM_JS="$ROOT/prefix/node/lib/node_modules/pnpm/bin/pnpm.cjs"
 if [ -f "$PNPM_JS" ]; then
-  [ -x "$ROOT/bin/pnpm" ] || fail "runtime 携带 pnpm 但 pnpm shim 缺失"
-  grep -qF '# dsh-termux node shim' "$ROOT/bin/pnpm" || fail "pnpm shim 缺少生成标记"
-  PVER="$("$ROOT/bin/pnpm" --version 2>"$ROOT/shim-pnpm-err.log")" \
-    || { cat "$ROOT/shim-pnpm-err.log" >&2; fail "pnpm shim 无法运行"; }
-  ok "pnpm shim 运行 ($PVER)"
+	[ -x "$ROOT/bin/pnpm" ] || fail "runtime 携带 pnpm 但 pnpm shim 缺失"
+	grep -qF '# dsh-termux node shim' "$ROOT/bin/pnpm" || fail "pnpm shim 缺少生成标记"
+	PVER="$("$ROOT/bin/pnpm" --version 2>"$ROOT/shim-pnpm-err.log")" ||
+		{
+			cat "$ROOT/shim-pnpm-err.log" >&2
+			fail "pnpm shim 无法运行"
+		}
+	ok "pnpm shim 运行 ($PVER)"
 else
-  warn_record "基线 tarball 未携带 pnpm; 'dsh plugin' 在该基线上仍会 127 (发布含 pnpm 的版本并 re-pin 后本断言自动变为强断言)"
+	warn_record "基线 tarball 未携带 pnpm; 'dsh plugin' 在该基线上仍会 127 (发布含 pnpm 的版本并 re-pin 后本断言自动变为强断言)"
 fi
 
 echo "=== 7. 本地正在运行的 dsh runtime 未被触碰 ==="

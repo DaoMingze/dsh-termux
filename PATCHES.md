@@ -382,7 +382,7 @@ Design notes:
 - **graceful degradation**: callers without an updater path get no branch emitted, so three-argument invocations behave byte-for-byte as before, and an install run by an OLD generator against a NEW caller ignores the surplus positional argument harmlessly (verified against the R1 baseline tarball);
 - if a future upstream release ever adds its own `dsh update`, this interception shadows it — drop the fourth argument (regenerate the wrapper) before reporting an upstream bug.
 
-Emitted by `write_dsh_wrapper` when given the optional updater path — all three emitters pass it (`04-run-web.sh`, `update-dsh.sh`, `build/install.sh`). Not an environment fix strictly needed to *run* dsh: it is convenience built on the same single-source wrapper. Guarded by CI.
+Emitted by `write_dsh_wrapper` when given the optional updater path — all three emitters pass it (`04-launch.sh`, `update-dsh.sh`, `build/install.sh`). Not an environment fix strictly needed to *run* dsh: it is convenience built on the same single-source wrapper. Guarded by CI.
 
 #### The updater is self-contained and self-updating
 

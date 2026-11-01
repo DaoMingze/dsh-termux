@@ -6,11 +6,11 @@ name: patch-check
 # function of what UPSTREAM publishes, not of what a pull request changes.
 # Hence the triggers:
 #   - the patch inputs change (patches/, the registry, the pinned Node version);
-#   - a release is imminent: a pull request that touches VERSION is by definition
-#     the one that will trigger release.yml (AGENTS.md 6.6 keeps the bump in its
-#     own commit on the triggering branch), and that is the moment a stale patch
-#     set would get baked into a shipped artifact;
-#   - workflow_dispatch, to aim it at any npm spec from any branch.
+#   - workflow_dispatch, to aim it at any npm spec from any branch — this is
+#     also the release-adjacent moment now that the repo VERSION file is
+#     retired and releases are dispatched manually with an explicit tag;
+#   - there is no VERSION path filter anymore: the file is gone (the project
+#     version rides on the release tag).
 #
 # There is deliberately NO schedule. A nightly poll costs a run entry every day
 # whether or not upstream moved, and the failure it guards against is mild:
@@ -31,11 +31,7 @@ name: patch-check
 # here keeps CI on the same code path as the device scripts.
 
 # NOTE: the two path lists below are duplicated on purpose — GitHub Actions
-# does not support YAML anchors/aliases. They are ALMOST identical: 'VERSION'
-# is deliberately pull-request-only. On main that same content was just verified
-# by the pull request, and release.yml's own build applies the patch set and
-# fails loudly regardless, so re-running the 12-minute job on the merge commit
-# would buy nothing.
+# does not support YAML anchors/aliases. They are identical.
 on:
   pull_request:
     paths:
@@ -43,9 +39,6 @@ on:
       - 'scripts/patch-lib.sh'
       # The boot smoke runs under this Node; a version bump must be re-smoked.
       - 'NODE_VERSION'
-      # A VERSION bump means this branch is about to cut a release: verify the
-      # patch set against the newest npm dsh BEFORE release.yml bundles it.
-      - 'VERSION'
       - '.github/workflows/patch-check.yml'
   push:
     branches: [main]
@@ -79,9 +72,11 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          # 单一事实源: 仓库根 NODE_VERSION 文件 (与设备脚本/release 构建同源),
-          # 顺带把 CI 从 "24 浮动" 钉到精确版本。
-          node-version-file: NODE_VERSION
+          # 主机 node 只需能跑 npm 与补丁校验, 与实际运行时无关: 运行时的 node
+          # 单一事实源是仓库根 NODE_VERSION 文件 (现为 "lts", 由 scripts/
+          # common.sh 的 resolve_node_version 解析), 而 setup-node 读不懂裸
+          # "lts", 所以这里直接跟 active LTS 线。
+          node-version: lts/*
           # setup-node >=5 caches the package manager automatically. There is no
           # lockfile at the repo root (the scratch install lives in work/), and a
           # fresh resolve against the registry is the point of this job, so the

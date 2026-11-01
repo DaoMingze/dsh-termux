@@ -2,6 +2,7 @@
 # 种子文件：aisa 只在缺失时铺设，此后归项目所有（sync 不覆盖、check 不比字节）。
 default_install_hook_types: [pre-commit]
 default_stages: [pre-commit]
+minimum_pre_commit_version: "4.4.0"
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -14,13 +15,46 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
         args: ["--maxkb=1024"]
+      # 大小写只差一个字母的文件在 Windows/macOS 上互相覆盖，先拦进仓库前。
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: detect-private-key
+      # 机制是「取本机真实 AWS 密钥比对暂存文件」，本机没配 AWS 时退 2，
+      # 故放行无凭据环境；有凭据的机器上照常拦真钥泄漏。
+      - id: detect-aws-credentials
+        args: ["--allow-missing-credentials"]
+      # 换行基准 LF；bat/cmd 例外——cmd.exe 要求 CRLF，混 LF 会解析错乱。
+      # 排除后由下一条同仓条目钉成 CRLF；.gitattributes 已把两者钉成 crlf 检出。
       - id: mixed-line-ending
         args: ["--fix=lf"]
-
-  - repo: https://github.com/rvben/rumdl-pre-commit
-    rev: v0.2.78
+        exclude: \.(bat|cmd)$
+  # 同仓写第二遍只为换参数：一个钩子装不下 LF 基准与 bat/cmd 例外两组 args。
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
     hooks:
-      # 同一范围单一工具：lint 与 format 都归 rumdl，不引 markdownlint/prettier
-      - id: rumdl
-        args: ["--fix"]
-      - id: rumdl-fmt
+      - id: mixed-line-ending
+        name: mixed-line-ending (bat/cmd → CRLF)
+        args: ["--fix=crlf"]
+        files: \.(bat|cmd)$
+  # 拼写检查只认 ASCII 词，中文内容天然免疫；误报词往 --ignore-words-list 追加。
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.3
+    hooks:
+      - id: codespell
+  # shell 脚本：静态检查 + 就地格式化。只碰 types: [shell] 的文件，仓库没有 .sh 时零开销。
+  # .aisa/base/ 是字节快照、.agents/skills/ 是模板投影，都不许被格式化打回。
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        exclude: ^(\.aisa/base/|\.agents/skills/)
+        # 与 CI 同参 (verify.yml 的 static job)。钩子默认不带这两个: 缺 -P
+        # SCRIPTDIR 时 '# shellcheck source=' 的相对路径按工作目录解析, 跟不进
+        # sandbox-lib.sh, 库里读取的变量 (ROUTE) 就成了"赋值后无人读"——凭空
+        # 报 SC2034。本地钩子与 CI 必须同参, 否则"本地红、CI 绿"要逐条归因。
+        args: ["-s", "bash", "-x", "-P", "SCRIPTDIR", "-S", "warning"]
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.14.1-1
+    hooks:
+      - id: shfmt
+        exclude: ^(\.aisa/base/|\.agents/skills/)
