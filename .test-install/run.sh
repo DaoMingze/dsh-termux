@@ -4,8 +4,13 @@
 # 设计原则:
 #   单一事实源 —— 基线数据只在 baseline.env, 其余全部派生;
 #   共享逻辑进库不进散文 —— 隔离/断言/哨兵在 sandbox-lib.sh;
-#   交付门槛 = 一个命令 —— all 即矩阵, 不需要「记得挑哪个脚本」;
-#   测不到的盲区要显式化 —— r5 补上「tarball 内置更新器」这条真实用户路径。
+#   交付门槛 = 一个命令 —— all 即矩阵, 不需要「记得挑哪个脚本」。
+#
+# 方案A（从 GitHub release 装预构建运行时）已退役：仓库不再产出 install.sh /
+# 运行时 tarball / 补丁集资产。baseline.env 因此被**冻结**在最后一份已发布产物上，
+# 只作为 r4/r6/serve 的种子使用——它不再有新版，也不再是「用户会拿到什么」。
+# r1/r2/r5 随方案A 一并删除; r6（--self 只读本地）的断言需按新语义重写，
+# 目前没有自动化覆盖 —— 这是已知缺口，不要当成「已验证」。
 #
 # 用法:
 #   bash .test-install/run.sh r1|r2|r4|r5|r6   # 单条路线
@@ -20,8 +25,8 @@
 set -uo pipefail
 
 TI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-[ -f build/install.sh ] || {
-	echo "请在仓库根目录运行 (build/install.sh 不存在)" >&2
+[ -f scripts/00-setup.sh ] || {
+	echo "请在仓库根目录运行 (scripts/00-setup.sh 不存在)" >&2
 	exit 1
 }
 # 复用公共库的 resolve_release_tag / fetch_release_assets (下载逻辑唯一实现)
@@ -33,31 +38,25 @@ usage_text() {
 用法: bash .test-install/run.sh <命令>
 
 测试路线:
-  r1                工作区 install.sh × 基线 tarball 全安装接线 (~12s, 每次迭代必跑)
-  r2 [--pinned]     下载当前 latest release 认证 shipped 包 (--pinned 离线测 pin 资产)
   r3                工作区 00-setup 流水线 (npm 源; 冷装 20min+, 仅改管线时跑)
                     渠道 DSH_VERSION=@deepseek-ai/dsh@<tag>; 沙箱 DSH_SANDBOX=<name>
                     (默认 setup; 指名即另一套沙箱 —— serve.sh 的 DSH_TARGET= 就这样用)
-  r4                更新链路: 工作区更新器 × 种子沙箱 (需 npm + GitHub 网络)
+  r4                更新链路: 工作区更新器 × 种子沙箱 (需 npm registry 网络)
                     渠道 DSH_UPDATE_TAG=<dist-tag> (默认 latest); 沙箱 DSH_SANDBOX=<name>
-                    (默认 update 与 r5/r6 共用; 指名即另一套沙箱)
-                    第 8 步强制走自动刷新分支 (下载补丁集资产 -> re-exec -> 继续 npm)
-                    注: 更新器的补丁集永远来自最新稳定 release, 所以 -t alpha 这类
-                    跨渠道更新会在补丁漂移时必红 —— 渠道测试请用 r3
-  r5                更新链路: tarball 内置更新器 = Option A 用户真实路径 (需 npm 网络)
-  r6                更新链路: 工作区更新器 --self 直接应用补丁集 + 本地补丁集 (仅 Part G 需 GitHub)
-  all [--with-r3]   交付门槛 = r1+r2+r4+r5+r6
+                    (默认 update 与 r6 共用; 指名即另一套沙箱)
+                    种子 = baseline.env 冻结的最后一份发布物 (方案A 已退役, 不再产新版)
+  all [--with-r3]   交付门槛 = r4 (r3 冷装 20min+, 改 00-04 管线时用 --with-r3 追加)
+                    --self 只读本地的语义目前无自动化覆盖 (r6 待重写)
 
 人类实测:
-  serve [端口]      过 r1 门槛后在沙箱内起 dsh web (:3141)
+  serve [端口]      在沙箱内起 dsh web (:3141); 种子同上 (冻结的发布物)
                     环境开关: WITH_CREDS=1 复制凭据 / NO_OPEN=1 不弹浏览器 / REUSE=1 复用沙箱
                     非基线对象: TAG=<发布物> 认证指定产物 / DSH_TARGET=<dist-tag> 现构建
                     某 npm 渠道的运行时并起它的 web (免基线门槛; 补丁漂移类改动走这条)
 
-基线管理 (事实源: .test-install/baseline.env):
-  baseline check         查看 pin 内容/资产哈希/与 VERSION 是否漂移
-  baseline set latest    发版后换基线 (latest 自动解析为当前最新 tag)
-  baseline set <tag>     同上, 但钉住指定 tag
+基线管理 (事实源: .test-install/baseline.env; 方案A 退役后**冻结**, 不再有新版):
+  baseline check         查看 pin 内容/资产哈希
+  baseline set <tag>     只在需要换一份历史产物做种子时才动它
 
 其他:
   clean             删除全部 sandbox-* 沙箱 (GB 级), 保留基线/代码/留档; 重跑路线自动重建
@@ -236,13 +235,13 @@ main() {
 	local cmd="${1:-}"
 	[ $# -gt 0 ] && shift
 	case "$cmd" in
-	r1 | r2 | r4 | r5 | r6) route_run "$cmd" "$@" ;;
+	r4) route_run "$cmd" "$@" ;;
 	r3)
 		echo "提醒: r3 冷装 npm 全量解析约 20min+(依赖图属性, 属正常耗时, 别当挂死);"
 		route_run r3 "$@"
 		;;
 	all)
-		local routes="r1 r2 r4 r5 r6"
+		local routes="r4"
 		case " $* " in *" --with-r3 "*) routes="$routes r3" ;; esac
 		local r rc
 		for r in $routes; do

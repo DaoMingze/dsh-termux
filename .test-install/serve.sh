@@ -10,7 +10,7 @@ set -uo pipefail
 
 # ---- 用法 + 参数守卫（先于任何耗时步骤）----
 usage_text() {
-  cat <<'EOF'
+	cat <<'EOF'
 serve.sh — 人类实测入口: 在 .test-install/ 沙箱内装好 runtime 后启动沙箱化的
 dsh web, 供真机浏览器点检。全程不触碰本地正在运行的 dsh runtime 及其数据。
 
@@ -44,7 +44,10 @@ EOF
 }
 
 case "${1:-}" in
-  -h|--help) usage_text; exit 0 ;;
+-h | --help)
+	usage_text
+	exit 0
+	;;
 esac
 
 # 位置参数只有一个合法含义 = 端口。开关是环境变量, 写在命令**前面**。
@@ -53,24 +56,26 @@ esac
 # 抛 "--port must be a number" —— 2026-09-01 实测踩过 (`bash serve.sh TAG=...`
 # 装成 rc.2 并打印了 "http://127.0.0.1:TAG=..." 这种地址)。所以先验后跑。
 if [ "$#" -gt 1 ]; then
-  echo "!! 位置参数最多一个 (端口); 收到 $# 个: $*" >&2
-  usage_text >&2
-  exit 2
+	echo "!! 位置参数最多一个 (端口); 收到 $# 个: $*" >&2
+	usage_text >&2
+	exit 2
 fi
-PORT="${1:-${PORT:-3141}}"   # 位置参数优先, 否则 $PORT, 默认 3141 (避开本地 dsh web 的 3080)
+PORT="${1:-${PORT:-3141}}" # 位置参数优先, 否则 $PORT, 默认 3141 (避开本地 dsh web 的 3080)
 case "$PORT" in
-  *=*)
-    echo "!! '$PORT' 看起来是环境变量赋值 —— 它必须写在命令**前面**:" >&2
-    echo "     $PORT bash .test-install/serve.sh" >&2
-    exit 2 ;;
-  ''|*[!0-9]*)
-    echo "!! 位置参数只能是端口号 (收到: '$PORT')" >&2
-    usage_text >&2
-    exit 2 ;;
+*=*)
+	echo "!! '$PORT' 看起来是环境变量赋值 —— 它必须写在命令**前面**:" >&2
+	echo "     $PORT bash .test-install/serve.sh" >&2
+	exit 2
+	;;
+'' | *[!0-9]*)
+	echo "!! 位置参数只能是端口号 (收到: '$PORT')" >&2
+	usage_text >&2
+	exit 2
+	;;
 esac
 if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
-  echo "!! 端口超出范围 (1-65535): $PORT" >&2
-  exit 2
+	echo "!! 端口超出范围 (1-65535): $PORT" >&2
+	exit 2
 fi
 
 # TAG 给定时改用 r2 的沙箱: 装机与断言都由 r2 --tag 完成, 而它的落点布局
@@ -80,43 +85,46 @@ fi
 TAG="${TAG:-}"
 DSH_TARGET="${DSH_TARGET:-}"
 SANDBOX="${SANDBOX:-}"
-MODE=""   # "" = 基线模式 (默认), tag = 指定发布物, sandbox = 指定沙箱/渠道
+MODE="" # "" = 基线模式 (默认), tag = 指定发布物, sandbox = 指定沙箱/渠道
 if [ -n "$DSH_TARGET" ] && [ -n "$TAG" ]; then
-  echo "!! DSH_TARGET 与 TAG 互斥: 前者现构建某个 npm 渠道的运行时, 后者认证已发布的那个产物" >&2
-  exit 2
+	echo "!! DSH_TARGET 与 TAG 互斥: 前者现构建某个 npm 渠道的运行时, 后者认证已发布的那个产物" >&2
+	exit 2
 fi
 if [ -n "$SANDBOX" ] && [ -n "$TAG" ]; then
-  echo "!! SANDBOX 与 TAG 互斥 (TAG 固定用 sandbox-release)" >&2
-  exit 2
+	echo "!! SANDBOX 与 TAG 互斥 (TAG 固定用 sandbox-release)" >&2
+	exit 2
 fi
 if [ -n "$DSH_TARGET" ] && [ -z "$SANDBOX" ]; then
-  # 渠道名可以带 . 和 - (如 0.1.3-alpha.2), 其余字符一律换成 -, 免得变成奇怪路径
-  SANDBOX="target-$(printf '%s' "$DSH_TARGET" | tr -c 'A-Za-z0-9._-' '-')"
+	# 渠道名可以带 . 和 - (如 0.1.3-alpha.2), 其余字符一律换成 -, 免得变成奇怪路径
+	SANDBOX="target-$(printf '%s' "$DSH_TARGET" | tr -c 'A-Za-z0-9._-' '-')"
 fi
 if [ -n "$TAG" ]; then
-  ROOT="$PWD/.test-install/sandbox-release"
-  MODE=tag
+	ROOT="$PWD/.test-install/sandbox-release"
+	MODE=tag
 elif [ -n "$SANDBOX" ]; then
-  ROOT="$PWD/.test-install/sandbox-$SANDBOX"
-  MODE=sandbox
+	ROOT="$PWD/.test-install/sandbox-$SANDBOX"
+	MODE=sandbox
 else
-  ROOT="$PWD/.test-install/sandbox-run"
+	ROOT="$PWD/.test-install/sandbox-run"
 fi
 
 # ---- 0. 前置检查 (仓库根目录 + 基线发布物) ----
-[ -f build/install.sh ] || { echo "请在仓库根目录运行 (build/install.sh 不存在)"; exit 1; }
+[ -f scripts/00-setup.sh ] || {
+	echo "请在仓库根目录运行 (scripts/00-setup.sh 不存在)"
+	exit 1
+}
 ITS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROUTE="serve"   # 先于 source: 库里的 ROUTE="${ROUTE:-}" 保留调用者预设值
+ROUTE="serve" # 先于 source: 库里的 ROUTE="${ROUTE:-}" 保留调用者预设值
 # shellcheck source=sandbox-lib.sh
-. "$ITS_DIR/sandbox-lib.sh"   # 复用唯一 unset 清单 (env_sanitize), 消除清洗清单漂移
+. "$ITS_DIR/sandbox-lib.sh" # 复用唯一 unset 清单 (env_sanitize), 消除清洗清单漂移
 TARBALL=.test-install/release-test/dsh-termux-runtime.tar.gz
 # TAG 模式不消费基线资产 (r2 --tag 自己下载到沙箱 dl/), 故跳过这条预检。
 # 渠道/沙箱模式也不消费: 它跑的是 setup 链路, dsh 来自 npm、node 来自 nodejs.org,
 # 与基线 tarball 无关 (只有默认基线模式拿它当种子)。
 if [ -z "$TAG" ] && [ "$MODE" != sandbox ] && [ "${REUSE:-0}" != "1" ] && [ ! -f "$TARBALL" ]; then
-  echo "缺少基线发布物: $TARBALL"
-  echo "请先运行: bash .test-install/run.sh baseline set <tag|latest> (联网下载并 pin)"
-  exit 1
+	echo "缺少基线发布物: $TARBALL"
+	echo "请先运行: bash .test-install/run.sh baseline set <tag|latest> (联网下载并 pin)"
+	exit 1
 fi
 
 # ---- 1. 自动层门槛: 沙箱安装测试必须全绿, 否则拒绝启动 ----
@@ -124,62 +132,72 @@ fi
 # 正常流程时其输出已随 r1 门槛透传; REUSE=1 跳过自动层时也补跑一次,
 # 防止基线条目过期却无人知晓 (WARN 不阻塞)。
 if [ "$MODE" = sandbox ] && [ -n "$DSH_TARGET" ]; then
-  # 渠道沙箱由 **r3 的 setup 链路**现构建: 官方 node+glibc 补丁 -> [02] npm 装该渠道
-  # -> [03] 工作区补丁集 -> [04] wrapper/opener/symlink。为什么不借 r4 (更新器) 的壳:
-  # update-dsh.sh 的补丁集**永远来自最新稳定 release** (它 self_update 时从那个 release
-  # 拉 patches/ 覆盖 runtime 再 re-exec 那份旧 updater), 所以 `-t alpha` 的真实含义是
-  # 「拿稳定版补丁去打 alpha 的 lib」——补丁一漂移必红, 且红相是 import hunk 的 :1,
-  # 会把人往上游引 (2026-09-08 实测坐实)。r3 这条链路的「装的渠道」与「打的补丁集」
-  # 各自独立, 才是渠道测试该走的路。代价: [02] 冷解析慢 (缓存热时约 2min)。
-  if [ "${REBUILD:-0}" = "1" ] || [ ! -x "$ROOT/bin/dsh" ]; then
-    echo "=== 构建 npm 渠道运行时: DSH_SANDBOX=$SANDBOX DSH_VERSION=@deepseek-ai/dsh@$DSH_TARGET bash $ITS_DIR/run.sh r3 ==="
-    echo "    (npm 装 $DSH_TARGET + **工作区**补丁集; 冷解析可能 20min+, 缓存热约 2-3min)"
-    DSH_SANDBOX="$SANDBOX" DSH_VERSION="@deepseek-ai/dsh@$DSH_TARGET" \
-      bash "$ITS_DIR/run.sh" r3 \
-      || { echo "FAIL: 渠道运行时构建失败 (r3 红), 拒绝启动 serve"; exit 1; }
-  else
-    echo "note: sandbox-$SANDBOX 已存在, 跳过构建 (REBUILD=1 强制重建)"
-  fi
+	# 渠道沙箱由 **r3 的 setup 链路**现构建: 官方 node+glibc 补丁 -> [02] npm 装该渠道
+	# -> [03] 工作区补丁集 -> [04] wrapper/opener/symlink。为什么不借 r4 (更新器) 的壳:
+	# update-dsh.sh 的补丁集**永远来自最新稳定 release** (它 self_update 时从那个 release
+	# 拉 patches/ 覆盖 runtime 再 re-exec 那份旧 updater), 所以 `-t alpha` 的真实含义是
+	# 「拿稳定版补丁去打 alpha 的 lib」——补丁一漂移必红, 且红相是 import hunk 的 :1,
+	# 会把人往上游引 (2026-09-08 实测坐实)。r3 这条链路的「装的渠道」与「打的补丁集」
+	# 各自独立, 才是渠道测试该走的路。代价: [02] 冷解析慢 (缓存热时约 2min)。
+	if [ "${REBUILD:-0}" = "1" ] || [ ! -x "$ROOT/bin/dsh" ]; then
+		echo "=== 构建 npm 渠道运行时: DSH_SANDBOX=$SANDBOX DSH_VERSION=@deepseek-ai/dsh@$DSH_TARGET bash $ITS_DIR/run.sh r3 ==="
+		echo "    (npm 装 $DSH_TARGET + **工作区**补丁集; 冷解析可能 20min+, 缓存热约 2-3min)"
+		DSH_SANDBOX="$SANDBOX" DSH_VERSION="@deepseek-ai/dsh@$DSH_TARGET" \
+			bash "$ITS_DIR/run.sh" r3 ||
+			{
+				echo "FAIL: 渠道运行时构建失败 (r3 红), 拒绝启动 serve"
+				exit 1
+			}
+	else
+		echo "note: sandbox-$SANDBOX 已存在, 跳过构建 (REBUILD=1 强制重建)"
+	fi
 fi
 if [ "$MODE" = sandbox ]; then
-  # 这条模式故意**不跑**基线门槛, 理由是它的被测对象就不是基线: 补丁漂移类改动在
-  # 基线那个 build 上从没漂过, 拿基线认证它等于什么都没测 (2026-09-08 实测踩实:
-  # 补丁 1 重锚后 serve 默认模式失败报的是「版本漂移」, 而漂移只存在于上游新版本)。
-  # 替代断言: 树必须是真装出来的 runtime + 打印被测 dsh 版本让人确认对象; 1b 仍会
-  # 用工作区补丁集重打一遍并验 marker + 跑两条行为探针。
-  [ -x "$ROOT/bin/dsh" ] || {
-    echo "!! sandbox-$SANDBOX 里没有可用 runtime; 单用 SANDBOX 需它已构建过," >&2
-    echo "   否则请给 DSH_TARGET=<dist-tag> 让本脚本用 r4 现构建" >&2
-    exit 1; }
-  SERVED="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-    "$ROOT/prefix/work/node_modules/@deepseek-ai/dsh/package.json" 2>/dev/null | head -1)"
-  echo "=== 实测对象: sandbox-$SANDBOX · dsh ${SERVED:-<未知>} (非基线, 不跑 r1/基线 pin 断言) ==="
-  echo "    渠道=${DSH_TARGET:-<复用已有沙箱>} · 补丁集=工作区 (1b 重打并验 marker)"
+	# 这条模式故意**不跑**基线门槛, 理由是它的被测对象就不是基线: 补丁漂移类改动在
+	# 基线那个 build 上从没漂过, 拿基线认证它等于什么都没测 (2026-09-08 实测踩实:
+	# 补丁 1 重锚后 serve 默认模式失败报的是「版本漂移」, 而漂移只存在于上游新版本)。
+	# 替代断言: 树必须是真装出来的 runtime + 打印被测 dsh 版本让人确认对象; 1b 仍会
+	# 用工作区补丁集重打一遍并验 marker + 跑两条行为探针。
+	[ -x "$ROOT/bin/dsh" ] || {
+		echo "!! sandbox-$SANDBOX 里没有可用 runtime; 单用 SANDBOX 需它已构建过," >&2
+		echo "   否则请给 DSH_TARGET=<dist-tag> 让本脚本用 r4 现构建" >&2
+		exit 1
+	}
+	SERVED="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+		"$ROOT/prefix/work/node_modules/@deepseek-ai/dsh/package.json" 2>/dev/null | head -1)"
+	echo "=== 实测对象: sandbox-$SANDBOX · dsh ${SERVED:-<未知>} (非基线, 不跑 r1/基线 pin 断言) ==="
+	echo "    渠道=${DSH_TARGET:-<复用已有沙箱>} · 补丁集=工作区 (1b 重打并验 marker)"
 elif [ "${REUSE:-0}" = "1" ] && [ -x "$ROOT/bin/dsh" ]; then
-  echo "WARN: REUSE=1 跳过自动层门槛, 复用现有沙箱 (仅限网页行为迭代; 安装链路改动禁止跳过)"
-  # REUSE 模式不消费基线, 只做软提醒: load_baseline 内部的 fail 会直接终止 serve
-  # (|| true 拦不住 exit), 故这里自行内联检查并降级为 WARN。
-  # TAG 模式与基线无关, 这条检查对它没有意义, 跳过。
-  if [ -n "$TAG" ]; then
-    echo "note: TAG=$TAG 模式复用 sandbox-release, 与基线无关"
-  elif [ -f "$ITS_DIR/baseline.env" ]; then
-    . "$ITS_DIR/baseline.env"
-    check_baseline_consistent || true
-  else
-    echo "WARN: baseline.env 缺失, REUSE 模式跳过基线一致性检查" >&2
-  fi
+	echo "WARN: REUSE=1 跳过自动层门槛, 复用现有沙箱 (仅限网页行为迭代; 安装链路改动禁止跳过)"
+	# REUSE 模式不消费基线, 只做软提醒: load_baseline 内部的 fail 会直接终止 serve
+	# (|| true 拦不住 exit), 故这里自行内联检查并降级为 WARN。
+	# TAG 模式与基线无关, 这条检查对它没有意义, 跳过。
+	if [ -n "$TAG" ]; then
+		echo "note: TAG=$TAG 模式复用 sandbox-release, 与基线无关"
+	elif [ -f "$ITS_DIR/baseline.env" ]; then
+		. "$ITS_DIR/baseline.env"
+		check_baseline_consistent || true
+	else
+		echo "WARN: baseline.env 缺失, REUSE 模式跳过基线一致性检查" >&2
+	fi
 elif [ -n "$TAG" ]; then
-  # 指定发布物: 门槛换成 r2 --tag, 它下载该 tag 的资产、用 **shipped** install.sh
-  # 装进 sandbox-release 并做完整断言。serve 只负责在它之上起 web。
-  echo "=== 自动层门槛: bash .test-install/run.sh r2 --tag $TAG ==="
-  bash "$ITS_DIR/run.sh" r2 --tag "$TAG" \
-    || { echo "FAIL: 发布物认证未通过, 拒绝启动 serve (先修复再重试)"; exit 1; }
-  echo "ok: 自动层全绿 (认证目标: $TAG)"
+	# 指定发布物: 门槛换成 r2 --tag, 它下载该 tag 的资产、用 **shipped** install.sh
+	# 装进 sandbox-release 并做完整断言。serve 只负责在它之上起 web。
+	echo "=== 自动层门槛: bash .test-install/run.sh r2 --tag $TAG ==="
+	bash "$ITS_DIR/run.sh" r2 --tag "$TAG" ||
+		{
+			echo "FAIL: 发布物认证未通过, 拒绝启动 serve (先修复再重试)"
+			exit 1
+		}
+	echo "ok: 自动层全绿 (认证目标: $TAG)"
 else
-  echo "=== 自动层门槛: bash .test-install/run.sh r1 ==="
-  bash "$ITS_DIR/run.sh" r1 \
-    || { echo "FAIL: 自动层未全绿, 拒绝启动 serve (先修复再重试)"; exit 1; }
-  echo "ok: 自动层全绿"
+	echo "=== 自动层门槛: bash .test-install/run.sh r1 ==="
+	bash "$ITS_DIR/run.sh" r1 ||
+		{
+			echo "FAIL: 自动层未全绿, 拒绝启动 serve (先修复再重试)"
+			exit 1
+		}
+	echo "ok: 自动层全绿"
 fi
 
 # ---- 1b. 把工作区补丁集应用到沙箱 work 树 ----
@@ -189,26 +207,32 @@ fi
 # §1.4 边界)。这里打的场景与 R4 认证一致: 基线种子 × 工作区补丁链。
 # 补丁漂移 (上游 lib 变了) 时 dsh_apply_patch_set 响亮失败, serve 拒绝启动。
 if [ -f "$ROOT/prefix/work/node_modules/@deepseek-ai/dsh/lib/bin.js" ]; then
-  echo "=== 应用工作区补丁集到沙箱 work 树 (基线 tarball 滞后于工作区) ==="
-  # shellcheck source=../scripts/patch-lib.sh
-  . "$ITS_DIR/../scripts/patch-lib.sh" \
-    || { echo "FAIL: 无法 source scripts/patch-lib.sh"; exit 1; }
-  # 先按 tarball 自带的那一版回退, 再打工作区补丁集 —— 实现和理由都在
-  # sandbox-lib.sh 的 overlay_workspace_patches 里 (r1 的 6b 断言用同一个函数,
-  # 这样"serve 起不来的错"必定先在 CI 红一次, 而不是反过来由真机发现)。
-  overlay_workspace_patches "$ROOT/prefix/work" \
-    || { echo "FAIL: 工作区补丁集无法应用到沙箱 work 树 (版本漂移?); 拒绝启动 serve"; exit 1; }
-  # 行为级探针 (marker 条件触发): 证明补丁后的授权表真的包含 os.tmpdir(),
-  # 而不只是文件里有 marker。kernel 级行为由点检清单 3b 的人类实测覆盖。
-  # marker 从工作区注册表派生 (上方已 source patch-lib.sh), 不硬编码。
-  LMARKER="$(dsh_patch_marker "npm-dsh-sandbox-local-landlock-tmpdir.patch" 2>/dev/null || true)"
-  landlock_tmpdir_probe "$ROOT/prefix/work" "$ROOT/prefix/node/bin/node" "$LMARKER"
-  FLMARKER="$(dsh_patch_marker "npm-dsh-fs-local-link-rename.patch" 2>/dev/null || true)"
-  fslocal_link_rename_probe "$ROOT/prefix/work" "$ROOT/prefix/node/bin/node" "$FLMARKER"
-  AMARKER="$(dsh_patch_marker "npm-dsh-attachment-local-durable-walk.patch" 2>/dev/null || true)"
-  attachment_durability_probe "$ROOT/prefix/work" "$ROOT/prefix/node/bin/node" "$AMARKER"
+	echo "=== 应用工作区补丁集到沙箱 work 树 (基线 tarball 滞后于工作区) ==="
+	# shellcheck source=../scripts/patch-lib.sh
+	. "$ITS_DIR/../scripts/patch-lib.sh" ||
+		{
+			echo "FAIL: 无法 source scripts/patch-lib.sh"
+			exit 1
+		}
+	# 先按 tarball 自带的那一版回退, 再打工作区补丁集 —— 实现和理由都在
+	# sandbox-lib.sh 的 overlay_workspace_patches 里 (r1 的 6b 断言用同一个函数,
+	# 这样"serve 起不来的错"必定先在 CI 红一次, 而不是反过来由真机发现)。
+	overlay_workspace_patches "$ROOT/prefix/work" ||
+		{
+			echo "FAIL: 工作区补丁集无法应用到沙箱 work 树 (版本漂移?); 拒绝启动 serve"
+			exit 1
+		}
+	# 行为级探针 (marker 条件触发): 证明补丁后的授权表真的包含 os.tmpdir(),
+	# 而不只是文件里有 marker。kernel 级行为由点检清单 3b 的人类实测覆盖。
+	# marker 从工作区注册表派生 (上方已 source patch-lib.sh), 不硬编码。
+	LMARKER="$(dsh_patch_marker "npm-dsh-sandbox-local-landlock-tmpdir.patch" 2>/dev/null || true)"
+	landlock_tmpdir_probe "$ROOT/prefix/work" "$ROOT/prefix/node/bin/node" "$LMARKER"
+	FLMARKER="$(dsh_patch_marker "npm-dsh-fs-local-link-rename.patch" 2>/dev/null || true)"
+	fslocal_link_rename_probe "$ROOT/prefix/work" "$ROOT/prefix/node/bin/node" "$FLMARKER"
+	AMARKER="$(dsh_patch_marker "npm-dsh-attachment-local-durable-walk.patch" 2>/dev/null || true)"
+	attachment_durability_probe "$ROOT/prefix/work" "$ROOT/prefix/node/bin/node" "$AMARKER"
 else
-  echo "WARN: 沙箱缺 work 树 ($ROOT/prefix/work), 跳过补丁应用" >&2
+	echo "WARN: 沙箱缺 work 树 ($ROOT/prefix/work), 跳过补丁应用" >&2
 fi
 
 # ---- 2. 隔离环境 (导出沙箱 HOME 前先记住本地正在运行的安装的路径, 供 WITH_CREDS 用) ----
@@ -224,12 +248,12 @@ export XDG_STATE_HOME="$ROOT/xdg/state"
 export DSH_RUNTIME_DIR="$ROOT/prefix"
 export DSH_BIN_DIR="$ROOT/bin"
 export DSH_HOME="$ROOT/home/.dsh"
-env_sanitize   # 统一清单: LD_PRELOAD/LD_LIBRARY_PATH/NODE_OPTIONS/NODE_REPL_EXTERNAL_MODULE
+env_sanitize # 统一清单: LD_PRELOAD/LD_LIBRARY_PATH/NODE_OPTIONS/NODE_REPL_EXTERNAL_MODULE
 export PATH="$ROOT/bin:/data/data/com.termux/files/usr/glibc/bin:$PATH"
 
 # $BROWSER 缺省指向沙箱 opener (Android intent 打开默认浏览器); 已继承的保留
 if [ -z "${BROWSER:-}" ]; then
-  export BROWSER="$ROOT/prefix/work/dsh-termux-open"
+	export BROWSER="$ROOT/prefix/work/dsh-termux-open"
 fi
 
 # ---- 3. (可选) 复制本地正在运行的 dsh runtime 的凭据/设置进沙箱, 让聊天实测真正可用 ----
@@ -242,19 +266,22 @@ fi
 #     重启, 手改会被本地版本盖掉——要么先改本地, 要么去掉 WITH_CREDS 复用已复制过的
 #     沙箱 (凭据文件上轮已在)。
 if [ "${WITH_CREDS:-0}" = "1" ]; then
-  if [ -f "$LIVE_DOTDSH/.credentials.yaml" ] && [ -f "$LIVE_DOTDSH/settings.yaml" ]; then
-    mkdir -p "$DSH_HOME"
-    cp "$LIVE_DOTDSH/.credentials.yaml" "$LIVE_DOTDSH/settings.yaml" "$DSH_HOME/"
-    echo "WITH_CREDS=1: 已把本地 ~/.dsh 凭据/设置复制进沙箱 $DSH_HOME (仅本次聊天实测用, 值未打印)"
-  else
-    echo "WARN: WITH_CREDS=1 但 $LIVE_DOTDSH 下缺 .credentials.yaml 或 settings.yaml, 跳过复制"
-  fi
+	if [ -f "$LIVE_DOTDSH/.credentials.yaml" ] && [ -f "$LIVE_DOTDSH/settings.yaml" ]; then
+		mkdir -p "$DSH_HOME"
+		cp "$LIVE_DOTDSH/.credentials.yaml" "$LIVE_DOTDSH/settings.yaml" "$DSH_HOME/"
+		echo "WITH_CREDS=1: 已把本地 ~/.dsh 凭据/设置复制进沙箱 $DSH_HOME (仅本次聊天实测用, 值未打印)"
+	else
+		echo "WARN: WITH_CREDS=1 但 $LIVE_DOTDSH 下缺 .credentials.yaml 或 settings.yaml, 跳过复制"
+	fi
 fi
 
 # ---- 4. 工作区 + 端口 ----
 mkdir -p "$ROOT/ws"
 # 落点守卫 (AGENTS §3): cd 失败还往下走, 后面的 dsh web 就会在**仓库根**里跑起来
-cd "$ROOT/ws" || { echo "FAIL: 无法进入沙箱工作区 $ROOT/ws"; exit 1; }
+cd "$ROOT/ws" || {
+	echo "FAIL: 无法进入沙箱工作区 $ROOT/ws"
+	exit 1
+}
 # PORT 已在顶部的参数守卫里定好并校验过 (那里必须先于门槛跑, 否则错的端口要等
 # 一整轮安装之后才暴露)。
 OPEN_FLAGS=()
@@ -286,12 +313,12 @@ echo "  3b) 让 agent 在 bash 工具里执行 mktemp -d 和 echo x > \$TMPDIR/t
 echo "      (workspace-write 下应成功且落在 $ROOT/tmp —— 验证 Landlock tmpdir 补丁;"
 echo "       修复前这两条会被 [sandbox: file access denied] 拒绝)"
 if [ -f "$ROOT/prefix/node/lib/node_modules/pnpm/bin/pnpm.cjs" ]; then
-  echo "  3c) 插件链路 (dsh plugin 依赖 PATH 上的 pnpm, 见 build-runtime.sh 2b):"
-  echo "      $ROOT/bin/pnpm --version 应出版本号;"
-  echo "      $ROOT/bin/dsh plugin --profile pnpm-probe add nanoid"
-  echo "      应拉包成功且无 'pnpm was not found' (需网络; 失败时贴完整输出)"
+	echo "  3c) 插件链路 (dsh plugin 依赖 PATH 上的 pnpm, 见 build-runtime.sh 2b):"
+	echo "      $ROOT/bin/pnpm --version 应出版本号;"
+	echo "      $ROOT/bin/dsh plugin --profile pnpm-probe add nanoid"
+	echo "      应拉包成功且无 'pnpm was not found' (需网络; 失败时贴完整输出)"
 else
-  echo "  3c) 跳过: 沙箱 runtime 未携带 pnpm (旧基线), 插件链路本项标「未实测」"
+	echo "  3c) 跳过: 沙箱 runtime 未携带 pnpm (旧基线), 插件链路本项标「未实测」"
 fi
 echo "  4) 浏览器交接: 第 1 条自动弹出的那次就是它 —— opener 由 dsh 进程调用,"
 echo "     不受 agent 文件沙箱约束; 浏览器弹出即本项通过"

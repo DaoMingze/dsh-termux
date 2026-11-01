@@ -18,7 +18,7 @@
 |[pnpm](https://www.npmjs.com/package/pnpm)|![pnpm stable](https://img.shields.io/npm/v/pnpm?label=pnpm)|![pnpm pre](https://img.shields.io/npm/v/pnpm/next-12?label=pnpm%20pre)|
 |[dsh](https://www.npmjs.com/package/@deepseek-ai/dsh)|![dsh stable](https://img.shields.io/npm/v/%40deepseek-ai/dsh?label=dsh)|![dsh pre](https://img.shields.io/npm/v/%40deepseek-ai/dsh/alpha?label=dsh%20pre)|
 
-说明:dsh 的 `next` 标签当前与 `latest` 指向同一构建,所以预发布列改用 `alpha` 标签——即最新发布的开发线。本项目跟随 Node **active LTS** 线([NODE_VERSION](NODE_VERSION) 写的是 `lts`,构建/安装时解析成具体版本);上表 Node.js 徽章跟踪的是上游,不是本项目的选择。
+说明:dsh 的 `next` 标签当前与 `latest` 指向同一构建,所以预发布列改用 `alpha` 标签——即最新发布的开发线。本项目跟随 Node **active LTS** 线——两侧默认值都是 [`config`](config) 里的 `lts`(构建与设备安装同源),构建/安装时解析成具体版本;上表 Node.js 徽章跟踪的是上游,不是本项目的选择。
 
 ## 为什么这样做
 
@@ -28,27 +28,32 @@
 
 > 仅支持 **arm64** 设备(几乎所有现代安卓手机都是 arm64)。
 
-### 方案A:从 GitHub release 安装
+只有一条安装路径:克隆本仓库,跑安装脚本。每一件都来自它的官方来源——包来自 Termux 仓库、Node 来自 nodejs.org、dsh 来自 npm registry,补丁直接从这份 checkout 打。本项目自己发布的只有补丁集(见[更新](#更新)),安装时并不需要它。
 
 ```sh
-pkg install glibc-repo
-pkg install glibc glibc-runner
-curl -fsSL https://github.com/ErEbusE/dsh-termux/releases/latest/download/install.sh | bash -s -- -y
-```
-
-安装器自动下载最新运行时 release、解包并配置好 `dsh` 命令。每个 release 内置的是发版时 dsh `latest` 的快照,具体版本号在 release tag 中。要固定某个 release,给命令加前缀 `DSH_RELEASE=<tag>`(tag 形如 `dsh-<内置 dsh 版本>-<项目版本>`,例如 `dsh-0.1.1-rc.2-1.0.1`)。
-
-### 方案B:克隆项目本地安装
-
-```sh
+pkg install git
 git clone https://github.com/ErEbusE/dsh-termux.git
 cd dsh-termux
 bash scripts/00-setup.sh        # 加 -y 自动接受所有提示
 ```
 
-它的第一步自己装 pkg 前置(glibc-repo,再加 glibc + glibc-runner,以及 gnupg 与 patchelf),然后**从 release 运行时 tarball 里取 Node**(`DSH_RELEASE`,默认 `latest`)——与该 release 预构建原生件同一次构建,ABI 不会错配;要改用 nodejs.org 的构建就设 `DSH_NODE_VERSION=<lts|24|24.19.0>`。接着把 ELF interpreter 指向 Termux 的 loader,提示是否卸载 pkg 安装的 node 栈(`nodejs`/`nodejs-lts`/`npm`/`pnpm`),并注册 `node`/`npm`/`npx`(运行时自带 pnpm 时一并注册)。
+它的第一步自己装 pkg 前置(glibc-repo,再加 glibc + glibc-runner,以及 gnupg 与 patchelf),然后**从 nodejs.org 取官方 Node 构建**(默认当前 active LTS 线),先对照签名的 `SHASUMS256.txt` 校验再解包。版本由配置文件的 `node_version` 决定([配置](#配置)),单次运行可用 `DSH_NODE_VERSION=<lts|24|24.19.0>` 覆盖。接着把 ELF interpreter 指向 Termux 的 loader,提示是否卸载 pkg 安装的 node 栈(`nodejs`/`nodejs-lts`/`npm`/`pnpm`),并注册 `node`/`npm`/`npx`(运行时自带 pnpm 时一并注册)。
 
-区别:方案B 在安装时从 npm 解析 dsh(即当时发布的最新版),方案A 使用发版时的快照。两者最终布局相同,都带同一个内置更新器。
+安装时从 npm 解析 dsh(即当时发布的最新版),补丁取自这份 checkout,然后把更新器与补丁集一起复制进运行时目录——此后日常维护不需要这份 checkout 还在原位。要拿到新补丁:`git pull` 之后重跑安装脚本,见[更新](#更新)。
+
+### 配置
+
+仓库根的 [`config`](config) 是安装的单一事实源:安装流水线读它,第 01 步把装上的实情写回。格式是 `key=value` 行,逐行解析、从不 `source`:
+
+|键|写入方|含义|
+|---|---|---|
+|`node_version`|你|要装的 Node:`lts`(当前 active LTS 线)、裸大版本如 `24`、或精确 `X.Y.Z`。单次运行可用 `DSH_NODE_VERSION` 覆盖。|
+|`npm_version`|你|`@deepseek-ai/dsh` 的 dist-tag(`latest`、`next`、`alpha`)或精确版本。单次运行可用 `DSH_VERSION` 覆盖。|
+|`pnpm_version`|你|pnpm 规格——停在 `10` 线,原因见文件内注释。|
+|`node_installed_version`|第 01 步|`<runtime>/node` 当前实际装的版本。|
+|`node_bin`|第 01 步|该 `node` 二进制的绝对路径。|
+
+只回写这两个 `node_*` 事实,正因为如此 `node_version=lts` 才能继续跟随 LTS 线,而不是被钉在上次装到的那个版本上。该文件受版本管理,所以安装后这两行会显示为已修改——那是安装记录,不是误改。
 
 ### 验证
 
@@ -68,15 +73,18 @@ dsh update -t next -y # 直接更新到 npm 的 next 标签,自动接受所有�
 dsh update --self     # 刷新补丁集并直接应用(不下载 npm 包)
 ```
 
-`dsh update` 会更新 dsh 版本并重打安卓补丁(需要设备上装有 `git`:`pkg install git`)。 补丁集随本项目的 release 演进、不走 npm;每次更新发现更新 release 时会自动刷新。 `--self` 是「只打补丁」路径:从最新 release 刷新更新器 + 补丁集,并直接应用到已安装的 dsh,不下载新的 npm 包。
+`dsh update` 更新 dsh 版本并重打运行时自带的补丁集——这条路径只跟 npm 打交道。补丁走自己的通道:本项目只发布一个产物 `dsh-termux-patchset.tar.gz`(约 40 KB,内含更新器的三个脚本 + 补丁文件),作为 GitHub release。`dsh update --self` 下载它、比对内容签名,只有运行时落后才应用;`--dry-run` 只报告「有没有更新」,不动任何东西。全程不下载 dsh、Node 或 glibc——那些都在设备本地。
+
+不想下载的话,`--patch-set <dir|tar.gz>` 直接应用你手上已有的补丁集——比如 `git pull` 之后 checkout 里的那份。
 
 |参数|作用|
 |---|---|
 |`-t, --tag TAG`|直接安装某个 dist-tag(如 `next`),不弹版本菜单|
 |`-v, --version VER`|直接安装某个精确版本(如 `0.1.1-rc.2`),不弹版本菜单|
 |`-y, --yes`|自动接受所有提示|
-|`--self`|从最新 release 刷新更新器 + 补丁集并直接应用(不做 npm 更新;`-t`/`-v` 被忽略)|
-|`--patch-set PATH`|用本地补丁集(含 `scripts/` + `patches/` + `VERSION` 的目录或 `.tar.gz`)代替下载;隐含 `--self`,可离线|
+|`--self`|下载本项目发布的补丁集,装成运行时的副本并应用到已安装的 dsh(不做 npm 更新;`-t`/`-v` 被忽略)|
+|`--patch-set PATH`|从 PATH(含 `scripts/` + `patches/` 的目录或 `.tar.gz`)取补丁集,而不是下载;隐含 `--self`|
+|`--dry-run`|与 `--self`/`--patch-set` 同用:只报告运行时是否落后,不改动任何东西|
 |`--force`|与 `--self`/`--patch-set` 同用:机件未变化时也强制重打|
 |(不带 `-t`/`-v`)|交互式版本菜单,回车默认 `latest`|
 
@@ -84,17 +92,18 @@ dsh update --self     # 刷新补丁集并直接应用(不下载 npm 包)
 
 ## 安装会在本地环境中做什么与卸载指导
 
-安装只改动三处:把自含的运行时(Node + 打过补丁的 dsh + 更新器)解包到 `~/.local/opt/dsh-termux-runtime/`,在 `~/.local/bin/dsh` 放一个命令符号链接,并在 `~/.bashrc` 末尾追加一行带 `# dsh-termux` 标记的 PATH 配置。dsh 自己的数据(配置、会话)独立存放在 `~/.dsh/`。
+安装只改动四处:把自含的运行时(Node + 打过补丁的 dsh + 更新器)解包到 `~/.local/opt/dsh-termux-runtime/`,在 `~/.local/bin/dsh` 放一个命令符号链接,在旁边注册 `node`/`npm`/`npx`(`pnpm`)shim,并在 `~/.bashrc` 追加一段带 `# dsh-termux` 标记的 PATH 配置。dsh 自己的数据(配置、会话)独立存放在 `~/.dsh/`;安装还会把实际装上的 Node 版本与路径记到 `config`。
 
-卸载——删除文件:
+卸载——一个脚本收干净:
 
 ```sh
-rm ~/.local/bin/dsh
-rm -rf ~/.local/opt/dsh-termux-runtime
-rm -rf ~/.dsh    # dsh 的数据(配置/会话);确认不需要再删——删前仔细核对
+bash scripts/99-uninstall.sh             # 先列清单,问一次
+bash scripts/99-uninstall.sh -y          # 不再提问
+bash scripts/99-uninstall.sh --dry-run   # 只列要删什么,不动手
+bash scripts/99-uninstall.sh --purge     # 连 ~/.dsh(配置+会话)一起删
 ```
 
-另外,`~/.bashrc` 中带 `# dsh-termux` 标记的那一行需要手动删除。
+它只删本项目生成的东西:运行时、`dsh` 符号链接、带 dsh-termux 标记的 shim、`~/.bashrc` 里那段标记块(备份留在 `~/.bashrc.dsh-uninstall.bak`),以及 `config` 里的安装记录。Termux 包(`glibc`、`glibc-repo`、`gnupg`、`patchelf`)、本仓库与 `~/.dsh` 都不会被碰,除非你明确要求。想手工删的话:`rm ~/.local/bin/dsh`、`rm -rf ~/.local/opt/dsh-termux-runtime`,再删掉 `~/.bashrc` 里 `# dsh-termux` 那段。
 
 ## 常见问题
 
@@ -102,7 +111,7 @@ rm -rf ~/.dsh    # dsh 的数据(配置/会话);确认不需要再删——删�
 
 **更新时报 "Patch does not apply / version drift"?** 说明 npm 上新发布的 dsh 改动了补丁目标文件。这是预期内的保护机制——此时 dsh 保持已安装但未打补丁,Android 上会话保存/write 工具可能报 `EACCES`。请到 [Issues](https://github.com/ErEbusE/dsh-termux/issues) 提报,或按 [PATCHES.md](PATCHES.md) 重新生成补丁。
 
-**装了很久没更新,`dsh update` 不识别?** 1.1.0 之前的 runtime 没有包装脚本快捷方式:直接运行内置更新器——`bash ~/.local/opt/dsh-termux-runtime/scripts/update-dsh.sh -t next -y`。升到 1.1.0+ 后 `dsh update` 快捷方式会随每次更新自我保持;1.2.1 之前的 runtime 还没有补丁集自动刷新(更新会带着旧补丁集继续,并有提示),用方案A 重装一次即可全部补齐。
+**`dsh update` 不识别?** 快捷方式是安装时写进包装脚本的。从已退役的预构建 release(1.1.0 之前)装出来的 runtime 没有:直接运行内置更新器——`bash ~/.local/opt/dsh-termux-runtime/scripts/update-dsh.sh -t next -y`——或用 `scripts/00-setup.sh` 重装成当前布局。
 
 **`dsh plugin` 报 "pnpm was not found"?** `dsh plugin` 会把参数转发给 pnpm(从 `PATH` 上拉起)。内置 pnpm 之前的 runtime 没有它——更新(`dsh update -y`)或重装即可获得:运行时在自己的 Node 里随包 pnpm(纯 JS 的 pnpm 10 线,设备端零下载),并在 `dsh` 旁边注册 `pnpm` 命令 shim。
 
@@ -118,24 +127,25 @@ rm -rf ~/.dsh    # dsh 的数据(配置/会话);确认不需要再删——删�
 dsh-termux/
 ├─ patches/                  Android 补丁(作用于 dsh 的 npm 编译产物)
 ├─ scripts/                  安装/更新流水线(在 Termux 上运行)
-│   ├─ 00-setup.sh           方案B 入口:环境配置,驱动 01→04
-│   ├─ 01-setup-glibc-node.sh   pkg 前置、glibc Node、node/npm 注册
+│   ├─ 00-setup.sh           入口:环境配置,驱动 01→04
+│   ├─ 01-setup-glibc-node.sh   pkg 前置、从 nodejs.org 取 Node、node/npm 注册
 │   ├─ 02-install-dsh.sh / 03-apply-patches.sh / 04-launch.sh
 │   │                        02 从 npm 装 dsh · 03 依赖体检 + 匹配补丁
 │   │                        · 04 生成 dsh 命令并启动指定 profile(默认 web)
-│   ├─ update-dsh.sh         更新器:版本切换 + 重打补丁 + 重写包装脚本
+│   ├─ 99-uninstall.sh       卸载:运行时、符号链接、shim、PATH 块
+│   ├─ update-dsh.sh         更新器:npm 换版本 + 重打本地补丁集
 │   └─ common.sh / patch-lib.sh  共享助手(包装脚本与 $BROWSER 打开器生成、
 │                                补丁登记表;CI 复用)
-├─ build/                    CI / 离线构建工具(arm64 Linux)
-│   ├─ build-runtime.sh      构建 release tarball(node + dsh + 补丁 + 校验)
-│   └─ install.sh            自包含安装器(release 产物,也在 tarball 内)
+├─ build/                    build-patchset.sh:打那唯一一个发布资产
 ├─ .github/workflows/        CI:静态门槛(verify)+ npm 补丁哨兵(patch-check)
-│                            + 稳定发布 + 源码构建 pre 发布
-├─ .test-install/            沙箱测试体系:六条路线 + serve.sh 人类点检
-├─ VERSION / NODE_VERSION    项目发布号(X.Y.Z;tag 为 dsh-<dsh 版本>-<VERSION>)/ release **构建**用的 Node 规格(`lts` = active LTS 线;也接受裸大版本与精确版本)——设备侧通过 release tarball 继承
+│                            + patchset 发布(只发补丁集)
+├─ .test-install/            沙箱测试体系(r3 安装流水线、r4 更新器)+ serve.sh
+├─ config                    安装用什么、以及装上了什么(node_version、npm_version、
+│                            pnpm_version;第 01 步会把 node_installed_version 与
+│                            node_bin 写回)
 ├─ README.md / README.zh-CN.md   用户文档:安装 / 更新 / 卸载
 ├─ PATCHES.md                全部修复与适配的唯一索引 + 补丁机制
-├─ CONTRIBUTING.md           贡献者工作流:测试门槛、CI、发布
+├─ CONTRIBUTING.md           贡献者工作流:测试门槛、CI
 └─ AGENTS.md                 AI 代理协议(测试真实性、沙箱边界)
 ```
 

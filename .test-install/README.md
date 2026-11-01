@@ -9,7 +9,7 @@
 
 ```text
 .test-install/
-├── run.sh                 # 唯一入口: r1|r2|r3|r4|r5|r6|all|serve|baseline|clean
+├── run.sh                 # 唯一入口: r3|r4|all|serve|baseline|clean
 ├── baseline.env           # 基线事实源(唯一数据处; 由 run.sh baseline set 写出, 不手编)
 ├── sandbox-lib.sh         # 公共核心: 隔离导出/唯一 unset 清单/grun stub/断言计数/
 │                          #   运行中 runtime 哨兵/shipped 补丁集解析/行为探针(landlock+fs-local+attachment)
@@ -17,7 +17,7 @@
 ├── tools/                 # 维护者工具(整目录纳管): tb.sh / pr-merge.sh / intent-token-probe.sh
 ├── serve.sh               # 人类实测入口: 沙箱内起 dsh web 供浏览器点检
 ├── README.md              # 本文件
-├── release-test/          # [ignore] 基线发布物本体 ~100MB(tarball + install.sh)
+├── release-test/          # [ignore] 冻结的基线发布物 ~100MB(方案A 已退役, 只作 r4 种子)
 └── sandbox-*/ scratch-*/  # [ignore] 各路线沙箱(重跑自动重建)与研发残留
 ```
 
@@ -25,9 +25,9 @@
 
 ```sh
 bash .test-install/run.sh help        # 全部命令一屏带注释
-bash .test-install/run.sh all         # 交付门槛 = r1+r2+r4+r5+r6 (--with-r3 追加 r3)
-bash .test-install/run.sh r1          # 单跑一条(日常迭代只需这条)
-bash .test-install/serve.sh           # 人类实测: 先跑门槛, 再起沙箱 Web (端口 3141)
+bash .test-install/run.sh all         # 交付门槛 = r4 (--with-r3 追加 r3)
+bash .test-install/run.sh r3          # 改 00-04 管线时跑(冷装 20min+)
+bash .test-install/serve.sh             # 起沙箱 dsh web, 端口 3141
 ```
 
 判定标准:**任何断言失败即 FAIL,禁止跳过或「只跑个大概」**;每条路线结束打印 `== [rN] done: N ok ==` 与集中 WARN。
@@ -37,7 +37,7 @@ bash .test-install/serve.sh           # 人类实测: 先跑门槛, 再起沙箱
 人类实测确认后,在合并/末位提交信息尾部追加一行 trailer,git 历史即实测台账 (`git log --grep='^Tested-by:'` 可检索;格式规范见 AGENTS.md §6.3)。`范围` = 一句本次人类实测覆盖面的描述,原样进入 trailer:
 
 ```sh
-bash .test-install/tools/tb.sh "r6 + full gate"          # 被测树=当前分支 tip
+bash .test-install/tools/tb.sh "r3 + r4"                 # 被测树=当前分支 tip
 bash .test-install/tools/tb.sh "clean checklist" 60944a5 # 显式指定被测树
 bash .test-install/tools/tb.sh --review "CI-only, no on-device surface"  # 无真机面
 ```
@@ -59,18 +59,14 @@ bash .test-install/tools/tb.sh --review "CI-only, no on-device surface"  # 无�
 |`pr-merge.sh`|带 trailer 合并 PR(默认 dry-run;依赖 `gh` CLI,见 AGENTS.md §2)|
 |`intent-token-probe.sh`|真机探针:`?token=` URL 经 Android intent 链是否被截断、同端口二次打开是否复用旧标签(`--twice`)|
 
-## 六条路线
+## 路线(r3 / r4)
 
 |路线|命令|测什么|网络|备注|
 |---|---|---|---|---|
-|R1|`r1`|工作区 `build/install.sh` × 基线 tarball 全安装接线(每次迭代必跑);1b 覆盖重装回归(种入旧 npm 树残留→重装→断言清空+npm 模块链可加载);6c node/npm/npx shim 断言(齐备+生成标记+三个可直连运行);6d pnpm 断言(runtime 携带则 shim 齐备+标记+可运行,旧基线无则 WARN)|无|~25s(两次解包);期望版本取自 baseline.env|
-|R2|`r2`(`--pinned` 离线测 pin 资产)|**下载当前 latest release** 认证:shipped install.sh + tarball 完好|默认需要|认证对象=用户将拿到的最新产物;下载物进沙箱 dl/,不碰 release-test/;1.2.1 起条件断言 tarball 顶层 VERSION|
-|R3|`r3`|工作区 `00-setup` 流水线 01(pkg 前置+glibc node+shim 注册)→**01b(release tarball 取 node, 用基线资产, 离线)**→02(npm)→03(树体检+补丁)→自含复制段→04(wrapper+profile 启动)|npm + nodejs.org|**冷装 20min+ 属正常**;前置预检真机 pkg 前置(glibc 三件套+gnupg+patchelf);01b 在基线资产缺席/哈希不符时只 note 不 FAIL|
-|R4|`r4`|种子旧 runtime → **工作区** `update-dsh.sh -t <tag> -y` 更新机制；第 8 步种入假旧 VERSION 强制走**自动刷新分支**（判定落后→下载补丁集资产→re-exec→继续 npm 并完成；marker 从已安装注册表派生）|npm registry + GitHub|`DSH_UPDATE_TAG=<tag>` 换目标;断言 wrapper 钩子指向 runtime 内置更新器|
-|R5|`r5`|同 R4 但种子=**latest 下载的** runtime、执行其**内置**更新器+补丁(Option A 真实路径);tarball 携带 VERSION 时加跑 **--self 自更新链路**(优先 ~40KB 补丁包资产、无资产回退完整 tarball),旧 release note 跳过;普通更新段的自动补丁集刷新对种子(=latest)天然判定一致|npm registry|钩子期望值按 shipped common.sh 能力派生|
-|R6|`r6`|**工作区更新器 `--self` 新语义**(刷新机件后直接应用补丁集,不碰 npm):A 本地目录集全链路(断言日志含「先退旧集」+应用+marker+wrapper,且无 npm 查询)/B 机件签名相同→报告已最新并跳过/C `--force` 重打 + `-t/-v` 忽略提示/D 本地 tarball(`build/build-patchset.sh` 现打)消费闭环/E 注册表缺件负例(响亮失败且不改 runtime)/F 哨兵缺失→子 shell 回退应用/G 下载 latest 资产路径/H 白盒哨兵(答 n 中止 NOTE 仅当补丁集真变化)|GitHub(仅 Part G)|期望值动态派生(工作区 VERSION/脚本、latest tag 尾段、被消费的注册表);A-F/H 离线可跑|
+|R3|`r3`|工作区 `00-setup` 流水线 01(pkg 前置+nodejs.org 取 node+验签+patchelf+config 读写+shim 注册)→**1c(config 优先级: env 未设时读 config 并复用已装 node, 不下载)**→02(npm)→03(树体检+补丁)→自含复制段→04(wrapper+profile 启动)|npm + nodejs.org|**冷装 20min+ 属正常**;前置预检真机 pkg 前置(glibc 三件套+gnupg+patchelf);设备侧不下载本项目 release 产物|
+|R4|`r4`|种子(冻结发布物解包) → **工作区** `update-dsh.sh -t <tag> -y`:npm 重装 + 用 checkout 的补丁集重打 + wrapper/opener/symlink 重写 + 钩子存活|npm registry|`DSH_UPDATE_TAG=<tag>` 换目标;断言 wrapper 钩子指向 runtime 内置更新器|
 
-R4 与 R5 共用 `sandbox-update/` 目录,**不可并行**;R6 用独立 `sandbox-self/`, 可与其并行但建议顺序跑(共享 npm/GitHub 带宽)。
+r4 使用 `sandbox-update/`;该目录由 `sandbox_init` 的 flock 串行保护,并行启动者会立即报错退出。
 
 ### 断言分级
 
@@ -83,14 +79,14 @@ R4 与 R5 共用 `sandbox-update/` 目录,**不可并行**;R6 用独立 `sandbox
 基线的 tag / sha256 / 内置 dsh 版本只存在于此一处,`set` 下载资产→现算哈希→ 原子写入(`latest` 自动解析为实际 tag):
 
 ```sh
-bash .test-install/run.sh baseline check      # 查看 pin/哈希/与 VERSION 漂移
+bash .test-install/run.sh baseline check      # 查看 pin 的资产是否存在/哈希是否相符
 bash .test-install/run.sh baseline set latest # 发版后 re-pin
 ```
 
 - 哈希一律现算,绝不手抄;
-- 基线一致性检查:r1/r2-pinned/r3/r4 启动时比对 pin 与仓库 VERSION,不一致 **WARN 不阻塞**(结论只对「当前 VERSION 的安装脚本」有效)——发版后必须 回来 `baseline set <新tag>`,WARN 会集中出现在 summary 无法无视;
+- 基线一致性检查:方案A 退役后 `baseline.env` 冻结,r3/r4 启动时只报告 pin 的资产是否存在与哈希是否相符;**它不再随发布漂移**,所以没有「发版后必须 re-pin」这条纪律了。
 - `baseline.env` 已入 git:机器无关(公开 release 资产的哈希任何人可复算), 换机/协作即用;改 pin 只走 `baseline set`,不手编;
-- re-pin 是纯派生数据(工具写出/哈希现算/无编辑内容,pin 内容由发布动作 本身批准):r2+r5 对新 release 全绿后**直推 main,无需 PR**(仅限 baseline.env 本身;`.test-install` 其余改动仍走 PR——见 AGENTS.md §1)。
+- `baseline.env` 只作 r4 的种子;换它属于需要 review 的改动(不再是机械 re-pin 豁免)。
 
 ## serve.sh(人类实测入口)
 
@@ -99,11 +95,11 @@ bash .test-install/run.sh baseline set latest # 发版后 re-pin
 **唯一合法的位置参数是端口**;其余开关一律是环境变量,**写在命令前面** (`bash .test-install/serve.sh -h` 是用法的唯一事实源,下表只是抄录):
 
 ```sh
-bash .test-install/serve.sh             # 门槛(r1)全绿才起服务, 端口 3141
-bash .test-install/serve.sh 3099        # 换端口(位置参数)
+bash .test-install/serve.sh             # 起沙箱 dsh web, 端口 3141
+bash .test-install/serve.sh             # 起沙箱 dsh web, 端口 3141
 PORT=3099 bash .test-install/serve.sh   # 换端口(环境变量; 位置参数优先)
 TAG=<release tag> bash .test-install/serve.sh   # 起用指定发布物而不是基线,
-                                        # 门槛换成 r2 --tag(pre 渠道产物的实测入口)
+                                        # (方案A 退役后 TAG= 模式已删除)
 WITH_CREDS=1 bash .test-install/serve.sh # 复制本地正在运行的 dsh runtime 的 ~/.dsh 凭据进沙箱(实测聊天)
 NO_OPEN=1 bash .test-install/serve.sh   # 不自动开浏览器(agent 冒烟)
 REUSE=1 bash .test-install/serve.sh     # 复用沙箱(仅限网页行为迭代, 跳过门槛)
@@ -119,7 +115,7 @@ WITH_CREDS=1 TAG=pre-dsh-0.1.2-alpha.3-gdd6322d-1.2.7 bash .test-install/serve.s
 DSH_TARGET=alpha bash .test-install/serve.sh
 ```
 
-**该让谁当前测对象**：默认模式起的是**基线 pin 的那个 build**（种子即 tarball）， 它的意义是"Option A 用户的稳定路径没坏"。而**补丁漂移类改动必须换对象**——被修的 代码在基线 build 里从没漂过，在那儿跑绿等于什么都没测，却会把"版本漂移"的假信号 甩到上游身上。三条入口按对象分：`TAG=`（已发布产物，含 pre 渠道，门槛 = `r2 --tag`， 用 **shipped** 补丁集）、`DSH_TARGET=`（npm 某渠道，门槛 = `r3` 现构建，用**工作区** 补丁集）、默认（基线，门槛 = `r1`）。后两条都不消费基线 pin 断言，启动时都会打印 实测对象与它的 dsh 版本，供回复里写清"在哪个 build 上测的"。
+**测的是哪个 build**：默认模式用**冻结的基线产物**当种子（方案A 的最后一份发布物），它证明的是「更新链路/补丁链在这份运行时上仍然成立」；补丁漂移类改动必须换对象——`DSH_TARGET=`（npm 某渠道，门槛 = `r3` 现构建，用**工作区**补丁集）。`TAG=` 与 `r2 --tag` 随方案A 一并删除。
 
 **为什么渠道模式走 r3 而不是 r4（更新器）**：`update-dsh.sh` 的补丁集**永远来自最新 稳定 release**——它先比对 runtime 与 `latest` 的 release identity，落后就 `self_update` （从那个 release 拉 `patches/` 覆盖 runtime，再 re-exec 刚下载的那份旧 updater）。 于是 `dsh update -t alpha` 的真实语义是"拿稳定版补丁去打 alpha 的 lib"，补丁一旦漂移 必然红，而且红相是旧补丁 import hunk 的 `…/lib/index.js:1`——看着像上游问题，实为 渠道错位（2026-09-08 实测坐实）。r3 的 [02][03] 不含更新器，"装哪个渠道"与"打哪套 补丁集"各自独立，才是渠道测试的正确入口；代价是 [02] 冷 npm 解析慢（缓存热时约 2-3 分钟）。
 
@@ -140,7 +136,7 @@ DSH_TARGET=alpha bash .test-install/serve.sh
 
 ## 已知约束与历史教训(改测试前必读)
 
-- `r4/r5 共用 sandbox-update/` 的串行约束由 `sandbox_init` 的 flock **强制**: 并行启动者立即人话报错退出(锁随进程退出自动释放,无陈锁);文档约束升格 为机制约束;
+- `r4` 用 `sandbox-update/` 的串行约束由 `sandbox_init` 的 flock **强制**: 并行启动者立即人话报错退出(锁随进程退出自动释放,无陈锁)。
 - `fetch_release_assets` 绝不用 `wget -c`(代理续传拼出「新包+旧尾」的事故);
 - `sandbox_init` 的 rm -rf 锚定 `BASH_SOURCE` 而非 CWD(防绕过 run.sh 时删错目录);
 - `env_sanitize` 是唯一 unset 清单(历史上窄清单漂移过一次);

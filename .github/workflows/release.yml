@@ -1,500 +1,95 @@
-name: release
+name: patchset
 
+# Publishes the ONLY artifact this project ships: the patch set
+# (dsh-termux-patchset.tar.gz — the updater's three scripts plus the patch
+# files, ~40 KB). glibc, Node, npm and dsh itself are installed on the device
+# from their own upstreams, so nothing else is built or uploaded here.
+#
+# Runs when the patch set actually changes, and by hand. No cron: there is
+# nothing to poll — a release here only ever mirrors the checkout.
 on:
-  workflow_dispatch:
-    inputs:
-      dsh_version:
-        description: 'dsh npm spec to install (e.g. @deepseek-ai/dsh@next, @deepseek-ai/dsh@0.1.5-alpha.1). Empty = the DSH_RELEASE_SPEC repository variable, else @deepseek-ai/dsh@latest.'
-        required: false
-        default: ''
-      tag:
-        description: 'Tag override (optional; defaults to dsh-<bundled dsh version>-<VERSION>)'
-        required: false
-        default: ''
-      node_version:
-        description: 'Node.js version override (linux-arm64; default: NODE_VERSION file)'
-        required: false
-        default: ''
-      notes:
-        description: 'Free-form release notes (fixes, known issues...) appended to the body'
-        required: false
-        default: ''
   push:
     branches: [main]
+    paths:
+      - 'patches/**'
+      - 'scripts/patch-lib.sh'
+      - 'build/build-patchset.sh'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
 
-# Two release builds running at once would race on the same tag/release.
+# Two publishers racing on the same tag/release would corrupt the asset.
 concurrency:
-  group: release-${{ github.ref }}
+  group: patchset-release
   cancel-in-progress: false
 
-# Least privilege by default; the build job raises it to `contents: write` for
-# the release upload only.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04-arm   # arm64 glibc host; node runs natively (no grun)
-    # A real build takes ~15 minutes (the npm install dominates); cap it so a
-    # hung registry cannot burn the 6-hour default.
-    timeout-minutes: 60
-    permissions:
-      contents: write           # softprops/action-gh-release creates the release
-    env:
-      # Inputs pass through the environment, never interpolated into the
-      # script text (same hygiene as patch-check.yml).
-      INPUT_DSH_VERSION: ${{ github.event.inputs.dsh_version }}
-      # Stable-channel default when a run is not an explicit manual dispatch:
-      # a repository variable can pin the exact dsh a release bundles (e.g.
-      # @deepseek-ai/dsh@0.1.5-alpha.1) without editing this workflow. Unset
-      # means "whatever npm's latest dist-tag points at".
-      RELEASE_SPEC_DEFAULT: ${{ vars.DSH_RELEASE_SPEC }}
-      INPUT_TAG: ${{ github.event.inputs.tag }}
-      INPUT_NODE_VERSION: ${{ github.event.inputs.node_version }}
-      INPUT_NOTES: ${{ github.event.inputs.notes }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  publish:
+    # No arm64 needed: this job packs a tarball and calls `gh`.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Resolve build inputs
-        id: resolve
-        shell: bash
+      - name: Pack the patch set
+        id: pack
         run: |
           set -euo pipefail
-          echo "dsh_spec=${INPUT_DSH_VERSION:-${RELEASE_SPEC_DEFAULT:-@deepseek-ai/dsh@latest}}" >> "$GITHUB_OUTPUT"
-          # NODE_VERSION may be the repo default "lts"; resolve it with the same
-          # resolver the device scripts use, so the build input and the release
-          # notes both carry a concrete version instead of a moving keyword.
-          node_spec="${INPUT_NODE_VERSION:-$(tr -d '[:space:]' < NODE_VERSION)}"
-          node_version="$( source scripts/common.sh; resolve_node_version "$node_spec" )" \
-            || { echo "!! cannot resolve the Node version from '$node_spec'" >&2; exit 1; }
-          [ -n "$node_version" ] || { echo "!! resolved Node version is empty" >&2; exit 1; }
-          echo "node_version=${node_version}" >> "$GITHUB_OUTPUT"
-          # Project VERSION is DERIVED, not a repo file (the VERSION file was
-          # retired): an explicit dispatch tag is now the version declaration,
-          # and its trailing segment IS the project version (dsh-<dsh>-<PV>).
-          # A repo VERSION file still wins as a legacy fallback if present.
-          if [ -n "$INPUT_TAG" ]; then
-            echo "project_version=${INPUT_TAG##*-}" >> "$GITHUB_OUTPUT"
-          else
-            echo "project_version=$(tr -d '[:space:]' < VERSION 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
-          fi
+          # The signature is computed from the same members the asset carries
+          # (three scripts + patches/*.patch), so a device can compare it with
+          # `dsh update --self --dry-run` and know whether it is behind.
+          sig="$(bash -c 'source scripts/common.sh; dsh_patch_set_signature .')"
+          bash build/build-patchset.sh -o dsh-termux-patchset.tar.gz
+          tag="patches-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
+          echo "signature=$sig" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "signature: $sig"
+          echo "tag:       $tag"
 
-      # Cheap gate before the ~16-minute build. A push releases only when the
-      # project VERSION changed since the latest published release; upstream
-      # moving under an unchanged VERSION is a manual dispatch (CONTRIBUTING
-      # "Releases and versioning"). Everything here is seconds (registry JSON
-      # + gh). Comparing the *bundled dsh version* instead made every push try
-      # to re-release the npm-latest bundle whenever the newest release had
-      # been published from another channel — and then fail on the tag it had
-      # already created.
-      - name: Skip release when nothing changed
+      - name: Skip when this commit was already published
         id: gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${{ steps.resolve.outputs.project_version }}"
-          SPEC="${{ steps.resolve.outputs.dsh_spec }}"
-          RESOLVED="$(python3 - "$SPEC" <<'PYEOF'
-          import json, sys, urllib.request, urllib.parse
-          spec = sys.argv[1]
-          pkg = spec.removeprefix('@')
-          if '@' in pkg:
-              pkg, want = pkg.rsplit('@', 1)
-          else:
-              want = 'latest'  # bare @deepseek-ai/dsh means latest, per npm
-          try:
-              # Scoped packages: the packument path requires %2F per scope (@deepseek-ai%2Fdsh).
-              url = 'https://registry.npmjs.org/@' + urllib.parse.quote(pkg, safe='')
-              with urllib.request.urlopen(url, timeout=20) as r:
-                  m = json.load(r)
-          except Exception:
-              print(''); raise SystemExit
-          if want in m.get('versions', {}): print(want)
-          elif want in m.get('dist-tags', {}): print(m['dist-tags'][want])
-          else: print('')  # semver range etc.: cannot pre-resolve, let the build decide
-          PYEOF
-          )"
-          LAST_TAG="$(gh release view --json tagName --jq .tagName 2>/dev/null || true)"
-          echo "VERSION=$VERSION  spec=$SPEC  resolved=${RESOLVED:-<unresolvable>}  last=$LAST_TAG"
-          # Exposed for the pre-build tag guard below; empty when the spec is a
-          # semver range, where only the build can name the bundled dsh.
-          echo "dsh_preresolved=$RESOLVED" >> "$GITHUB_OUTPUT"
-          if [ -z "$LAST_TAG" ]; then
-            echo "No previous release; proceeding."
-            echo "changed=1" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          LAST_VER="${LAST_TAG##*-}"
-          LAST_DSH="${LAST_TAG#dsh-}"; LAST_DSH="${LAST_DSH%-$LAST_VER}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -z "$VERSION" ]; then
-              echo "::error::No version declaration: fill the 'tag' input (dsh-<bundled dsh version>-<new project version>), or restore a repo VERSION file."
-              exit 1
-            fi
-            echo "::notice::Manual dispatch; proceeding (project version $VERSION, latest release $LAST_TAG)."
-            echo "changed=1" >> "$GITHUB_OUTPUT"
-          elif [ -z "$VERSION" ]; then
-            echo "::notice::No version declaration on push (the repo VERSION file is retired; the project version now rides on the release tag). Skipping."
-            echo "::notice::To release, dispatch this workflow manually and fill the 'tag' input."
-            echo "changed=0" >> "$GITHUB_OUTPUT"
-          elif [ "$VERSION" = "$LAST_VER" ]; then
-            echo "::notice::VERSION $VERSION is already released as $LAST_TAG; skipping (a push releases only on a VERSION change)."
-            echo "::notice::To release anyway (e.g. upstream dsh moved), dispatch this workflow manually."
-            echo "changed=0" >> "$GITHUB_OUTPUT"
-          else
-            echo "Changed: VERSION $VERSION (latest release $LAST_TAG); proceeding."
-            echo "changed=1" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Refuse a doomed run in seconds instead of after the ~16-minute build.
-      # The tag this run would create is predictable whenever the spec is a
-      # dist-tag or an exact version (the gate resolved it); a semver range is
-      # not, and falls through to the authoritative guard in "Resolve release
-      # tag" once the build has named the bundled dsh.
-      - name: Reject an existing release tag before the build
-        if: steps.gate.outputs.changed == '1'
-        shell: bash
-        env:
-          PRERESOLVED: ${{ steps.gate.outputs.dsh_preresolved }}
-          SPEC: ${{ steps.resolve.outputs.dsh_spec }}
-          PV: ${{ steps.resolve.outputs.project_version }}
-        run: |
-          set -euo pipefail
-          if [ -n "$INPUT_TAG" ]; then
-            TAG="$INPUT_TAG"
-          elif [ -n "$PRERESOLVED" ]; then
-            TAG="dsh-${PRERESOLVED}-${PV}"
-          else
-            echo "note: spec '$SPEC' is not pre-resolvable; the post-build tag guard still applies."
-            exit 0
-          fi
-          bash .github/scripts/require-free-tag.sh "$TAG"
-          echo "pre-build tag check passed: $TAG is free"
-
-      - name: Check build prerequisites
-        run: |
-          set -euo pipefail
-          git --version
-          curl --version | head -1
-
-      - name: Build runtime (node + work + patches)
-        if: steps.gate.outputs.changed == '1'
-        env:
-          DSH_RUNTIME_DIR: ${{ github.workspace }}/dsh-termux-runtime
-          DSH_NODE_VERSION: ${{ steps.resolve.outputs.node_version }}
-          DSH_DSH_VERSION: ${{ steps.resolve.outputs.dsh_spec }}
-        run: |
-          bash build/build-runtime.sh
-
-      # Read back what actually got installed — the request spec ("@...@latest")
-      # may resolve to anything at build time, and the release page should state
-      # the real thing.
-      - name: Resolve bundled dsh version
-        if: steps.gate.outputs.changed == '1'
-        id: dshver
-        run: |
-          set -euo pipefail
-          RT="${{ github.workspace }}/dsh-termux-runtime"
-          DSH_RESOLVED="$("$RT/node/bin/node" -p "require('$RT/work/node_modules/@deepseek-ai/dsh/package.json').version")"
-          echo "Bundled dsh: $DSH_RESOLVED (requested spec: ${{ steps.resolve.outputs.dsh_spec }})"
-          echo "dsh_resolved=$DSH_RESOLVED" >> "$GITHUB_OUTPUT"
-          echo "project_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-
-      # Tag = explicit override, or dsh-<bundled dsh version>-<VERSION>.
-      # Guards: the exact tag must not already exist (hard error — re-releasing
-      # the same combination means VERSION was forgotten); the same guard ran
-      # pre-build on the predictable tag, and require-free-tag.sh is its single
-      # home. A VERSION that is
-      # not newer than the last released one is only a warning, because a
-      # legitimate release can keep VERSION while the bundled dsh version
-      # changed (upstream moved; VERSION stayed).
-      - name: Resolve release tag
-        if: steps.gate.outputs.changed == '1'
-        id: tag
-        run: |
-          set -euo pipefail
-          DSH="${{ steps.dshver.outputs.dsh_resolved }}"
-          PV="${{ steps.resolve.outputs.project_version }}"
-          if [ -n "$INPUT_TAG" ]; then
-            TAG="$INPUT_TAG"
-            echo "Tag from dispatch override: $TAG"
-          else
-            TAG="dsh-${DSH}-${PV}"
-            echo "Tag derived from bundled dsh ${DSH} + VERSION ${PV}: $TAG"
-          fi
-          bash .github/scripts/require-free-tag.sh "$TAG"
-          MAX_SEMVER="$(git ls-remote --tags origin 'refs/tags/dsh-*-*' 2>/dev/null \
-            | awk '{print $2}' | sed 's|refs/tags/dsh-||' | awk -F- '{print $NF}' \
-            | sort -V | tail -1)"
-          if [ -n "$MAX_SEMVER" ]; then
-            CMP="$(python3 -c 'import sys
-          a,b=sys.argv[1],sys.argv[2]
-          x=[int(p) for p in a.split(".")]; y=[int(p) for p in b.split(".")]
-          print(">" if x>y else ("=" if x==y else "<"))' "$PV" "$MAX_SEMVER")"
-            if [ "$CMP" = "=" ]; then
-              echo "VERSION unchanged ($PV); releasing as a dsh-update only."
-            elif [ "$CMP" = "<" ]; then
-              echo "::warning::VERSION $PV is OLDER than the already released $MAX_SEMVER (downgrade?). Check the VERSION file."
-            fi
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      # Optional free-form notes from the dispatch form, formatted as a "Notes"
-      # section and injected into the release body via RELEASE_NOTES (empty when
-      # not provided). The blank line that separates the section from what
-      # precedes it lives IN the value, so the body can end right after its last
-      # paragraph: with no notes the substitution leaves nothing behind — not a
-      # run of empty lines above the auto-generated "What's Changed".
-      - name: Prepare release notes
-        if: steps.gate.outputs.changed == '1'
-        run: |
-          set -euo pipefail
-          if [ -z "$INPUT_NOTES" ]; then
-            echo "RELEASE_NOTES=" >> "$GITHUB_ENV"
-            exit 0
-          fi
-          {
-            echo "RELEASE_NOTES<<NOTES_EOF"
-            echo
-            echo "### Notes"
-            echo
-            printf '%s\n' "$INPUT_NOTES"
-            echo "NOTES_EOF"
-          } >> "$GITHUB_ENV"
-
-      - name: Stage release tarball
-        if: steps.gate.outputs.changed == '1'
-        shell: bash
-        run: |
-          set -euo pipefail
-          RT="${{ github.workspace }}/dsh-termux-runtime"
-          # The tarball is self-contained: runtime + installer + everything the
-          # embedded updater needs (its own helpers and the patch files). The
-          # repo-relative layout is preserved so update-dsh.sh works unmodified;
-          # install.sh sources scripts/common.sh out of this very tarball, so the
-          # helper set must match scripts/ exactly.
-          cp build/install.sh "$RT/install.sh"
-          mkdir -p "$RT/scripts"
-          cp scripts/update-dsh.sh scripts/common.sh scripts/patch-lib.sh "$RT/scripts/"
-          cp -r patches "$RT/patches"
-          # The runtime's own project version: the bundled updater compares it
-          # with the latest release to warn when the shipped PATCH SET is
-          # outdated (new patches ship in new project releases, not via npm).
-          # Derived (see the resolve step): the dispatch tag's trailing
-          # segment, not a repo VERSION file.
-          printf '%s\n' "${{ steps.resolve.outputs.project_version }}" > "$RT/VERSION"
-          # Fixed asset name so /releases/latest/download/<name> works for the
-          # curl|bash install path.
-          ARCHIVE="dsh-termux-runtime.tar.gz"
-          tar -czf "$ARCHIVE" -C "$RT" node work install.sh scripts patches VERSION
-          # Lightweight patch-set asset: the updater's self-update channel.
-          # 40KB vs the 100MB runtime tarball — refreshing the updater +
-          # patches + VERSION must not cost a full-runtime download. The member
-          # list lives in build/build-patchset.sh (also used locally and by
-          # --patch-set), so the release and a test package cannot drift apart.
-          PATCH_ARCHIVE="dsh-termux-patches.tar.gz"
-          bash build/build-patchset.sh -r "$RT" -o "$PATCH_ARCHIVE"
-          # Keep a standalone copy of the installer as its own asset too.
-          cp build/install.sh ./install.sh
-          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
-          echo "PATCH_ARCHIVE=$PATCH_ARCHIVE" >> "$GITHUB_ENV"
-          echo "Built: $ARCHIVE + $PATCH_ARCHIVE"
-          ls -lh "$ARCHIVE" "$PATCH_ARCHIVE"
-
-      # Prebuilt native addons asset (only when this dsh needs any): the
-      # device-side overlay (update-dsh.sh / 02-install-dsh.sh) fetches it,
-      # because Termux has no glibc toolchain to run node-gyp.
-      - name: Build prebuilt native addons asset
-        if: steps.gate.outputs.changed == '1'
-        id: natives
-        uses: ./.github/actions/build-natives
-        with:
-          work-dir: ${{ github.workspace }}/dsh-termux-runtime/work
-          node-bin: ${{ github.workspace }}/dsh-termux-runtime/node/bin/node
-
-      - name: Verify tarball structure
-        if: steps.gate.outputs.changed == '1'
-        shell: bash
-        run: |
-          set -euo pipefail
-          want=(
-            node/bin/node
-            work/node_modules/@deepseek-ai/dsh/lib/bin.js
-            install.sh
-            scripts/update-dsh.sh
-            scripts/common.sh
-            scripts/patch-lib.sh
-          )
-          # Patch files AND their target libs derive from DSH_PATCH_SET — the
-          # single registry in scripts/patch-lib.sh — so adding a patch needs
-          # no edit here; a patch declared but not packaged still fails below.
-          # A CONDITIONAL entry (4th field) whose target lib is absent from
-          # THIS bundle is inapplicable there — the same [ -f ] gate as
-          # dsh_patch_applicable (0.1.2-rc.1 ships no
-          # dsh-session-persistence-jsonl/lib/worker.cjs) — so it is not
-          # demanded. Mandatory entries keep demanding their target: a
-          # missing file is version drift and must fail the release.
-          source "$GITHUB_WORKSPACE/scripts/patch-lib.sh"
-          for entry in "${DSH_PATCH_SET[@]}"; do
-            want+=("patches/${entry%%:*}")
-            IFS=: read -r _ rel _ precondition _ <<<"$entry"
-            target="work/node_modules/@deepseek-ai/$rel"
-            if [ -n "$precondition" ] && [ ! -f "$GITHUB_WORKSPACE/dsh-termux-runtime/$target" ]; then
-              echo "skip (conditional patch target absent from this bundle): $rel"
-              continue
-            fi
-            want+=("$target")
-          done
-          # Read the listing once, then match in memory. Do NOT pipe tar directly
-          # into `grep -q`: grep exits on the first match, the pipe closes and
-          # tar dies with SIGPIPE (141), and with `-o pipefail` that fails the
-          # pipeline — a phantom "MISSING" on large (200MB) archives.
-          LIST="$(tar -tzf "$ARCHIVE")"
-          miss=0
-          for f in "${want[@]}"; do
-            if ! grep -qx "$f" <<< "$LIST"; then
-              echo "MISSING from tarball: $f"; miss=1
-            fi
-          done
-          [ "$miss" = 0 ] || { echo "FAIL: tarball structure"; exit 1; }
-          echo "OK: tarball has node + dsh + installer + updater + patches ($(grep -c '' <<< "$LIST") entries)"
-
-      # Smoke the shipped installer on this arm64 host: a stub `grun` satisfies
-      # its preflight (the wrapper is never executed here), a temp HOME keeps
-      # ~/.bashrc untouched, and temp prefix/bin prove the full unpack+wire-up.
-      # The browser-handoff fix makes install.sh reconfigure Node's ELF
-      # interpreter on the device; on this glibc host that needs patchelf and a
-      # loader the script's probe can find, so install patchelf and expose
-      # /lib/ld-linux-aarch64.so.1 (node ships with exactly that interpreter, so
-      # the configure step short-circuits as "already configured").
-      - name: Installer smoke test
-        if: steps.gate.outputs.changed == '1'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v patchelf >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y patchelf
-          fi
-          if [ ! -e /lib/ld-linux-aarch64.so.1 ]; then
-            LOADER="$(ldconfig -p | awk '/ld-linux-aarch64/{print $NF; exit}')"
-            test -n "$LOADER"
-            sudo ln -sf "$LOADER" /lib/ld-linux-aarch64.so.1
-          fi
-          T="$(mktemp -d)"
-          mkdir -p "$T/bin" "$T/home" "$T/prefix-parent"
-          printf '#!/bin/sh\nexit 0\n' > "$T/bin/grun"
-          chmod +x "$T/bin/grun"
-          PATH="$T/bin:$PATH" HOME="$T/home" GLIBC_PREFIX=/ \
-            bash ./install.sh -y -p "$ARCHIVE" \
-              --prefix "$T/prefix/dsh-termux-runtime" --bin "$T/bin2"
-          test -x "$T/prefix/dsh-termux-runtime/node/bin/node"
-          test -f "$T/prefix/dsh-termux-runtime/work/node_modules/@deepseek-ai/dsh/lib/bin.js"
-          test -f "$T/prefix/dsh-termux-runtime/install.sh"
-          test -f "$T/prefix/dsh-termux-runtime/scripts/update-dsh.sh"
-          # Browser-handoff fix: the wrapper must exec Node DIRECTLY (not via
-          # grun), or /proc/self/exe — process.execPath — becomes the loader.
-          grep -q '^exec ".*node/bin/node" --expose-internals ".*bin\.js" "\$@"' \
-            "$T/prefix/dsh-termux-runtime/work/dsh"
-          if grep -q 'exec grun' "$T/prefix/dsh-termux-runtime/work/dsh"; then
-            echo "FAIL: wrapper routes Node through grun (breaks process.execPath)"; exit 1
-          fi
-          test -L "$T/bin2/dsh"
-          grep -q "# dsh-termux" "$T/home/.bashrc"
-          echo "OK: installer smoke passed"
-
-      - name: Create GitHub Release
-        if: steps.gate.outputs.changed == '1'
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          # Title == tag. The repository name is already the page's heading and
-          # the URL; repeating it in every release title only ate the width the
-          # tag itself needs (the tag is the identity: dsh version + VERSION).
-          name: ${{ steps.tag.outputs.tag }}
-          generate_release_notes: true
-          # The note as published, so nobody has to re-edit it afterwards:
-          # one physical line per paragraph — GitHub keeps a wrapped source
-          # line as-is in the editor, where it reads as a stray mid-sentence
-          # break — and nothing in it that only maintainers need (how this
-          # workflow is triggered belongs in AGENTS.md, not on the page).
-          # Breaks that carry meaning stay: list items, code fences, and one
-          # sentence per line where a caveat is a list of facts.
-          body: |
-            ## dsh-termux runtime ${{ steps.tag.outputs.tag }}
-
-            Built on arm64 Linux (GitHub Actions `ubuntu-24.04-arm`) with:
-            - dsh requested: `${{ steps.resolve.outputs.dsh_spec }}`
-            - dsh bundled: **${{ steps.dshver.outputs.dsh_resolved }}**
-            - project version: **${{ steps.resolve.outputs.project_version }}** (`VERSION`)
-            - project source: `${{ steps.dshver.outputs.project_sha }}`
-            - Node.js: linux-arm64 `${{ steps.resolve.outputs.node_version }}`
-            - all Android patches from `DSH_PATCH_SET` applied and verified
-
-            Release tags are `dsh-<bundled dsh version>-<project VERSION>`.
-
-            The runtime tarball is self-contained: it bundles the installer, `update-dsh.sh` (+ its helpers) and the patch files, so you can keep following upstream dsh without cloning this repository.
-
-            ### Compatibility note
-            This release artifact is a **snapshot** built at release time.
-            It was tested against the dsh version it bundles only.
-            Upstream dsh evolves and may change the patched libs; if the patches drift, this artifact may not work.
-
-            ### Install (on Termux, arm64)
-
-            One-liner:
-
-            ```sh
-            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/install.sh | bash -s -- -y
-            ```
-
-            Or manually:
-            1. Download `dsh-termux-runtime.tar.gz` and `install.sh` (both attached).
-            2. Ensure glibc is available:
-            ```sh
-            pkg install glibc-repo && pkg install glibc glibc-runner
-            ```
-            3. Run: `bash install.sh -y` (or `bash install.sh -p dsh-termux-runtime.tar.gz`)
-            4. New shell, then `dsh --version` and `dsh web --port 3080`.
-
-            ### Install a specific release, or go back to an older one
-
-            `DSH_RELEASE` picks which release the installer downloads from; without it the installer resolves `latest`, which by definition never points at a pre-release:
-
-            ```sh
-            curl -fsSL https://github.com/${{ github.repository }}/releases/download/<tag>/install.sh \
-              | DSH_RELEASE=<tag> bash -s -- -y
-            ```
-
-            Run that from a directory with no leftover `*-runtime.tar.gz`:
-            without `-p`, `install.sh` first looks for a runtime tarball **next to itself**, and under `curl | bash` that means the current directory — it would unpack the leftover instead of the release you asked for.
-
-            Installing rewrites `~/.local/opt/dsh-termux-runtime`, the `dsh` symlink in `~/.local/bin` and one `# dsh-termux` PATH line in `~/.bashrc`.
-            It never reads or writes `~/.dsh`, so sessions and settings survive installs, updates and rollbacks alike.
-
-            ### Update later (no repo clone needed)
-
-            ```sh
-            dsh update -t next -y        # npm update + automatic patch-set refresh
-            dsh update --self            # refresh the patch set and apply it
-                                         # directly (no npm download)
-            dsh update --patch-set <dir|tar.gz>   # same, from a local patch set
-            ```
-            ${{ env.RELEASE_NOTES }}
-          files: |
-            ${{ env.ARCHIVE }}
-            ${{ env.PATCH_ARCHIVE }}
-            install.sh
-
-      # Published separately (softprops' files list is static, and the asset only
-      # exists when the packaged dsh actually needs a native addon): the device
-      # overlay in update-dsh.sh / 02-install-dsh.sh fetches exactly this file.
-      # NOTE: the emptiness check must happen in `run` — a step-level `if` cannot
-      # see variables written to GITHUB_ENV by an earlier step.
-      - name: Upload prebuilt natives asset
-        if: steps.gate.outputs.changed == '1' && steps.natives.outputs.natives-archive != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NATIVES_ARCHIVE: ${{ steps.natives.outputs.natives-archive }}
-        run: gh release upload "${{ steps.tag.outputs.tag }}" "$NATIVES_ARCHIVE" --clobber
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.pack.outputs.tag }}" >/dev/null 2>&1; then
+            echo "release ${{ steps.pack.outputs.tag }} already exists; nothing to do"
+            echo "exists=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish the asset
+        if: steps.gate.outputs.exists == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.pack.outputs.tag }}
+          SIG: ${{ steps.pack.outputs.signature }}
+        run: |
+          set -euo pipefail
+          cat > notes.md <<EOF
+          Patch set built from \`${GITHUB_SHA:0:7}\`.
+
+          Identity is the content signature, not a version number:
+
+          \`\`\`text
+          ${SIG}
+          \`\`\`
+
+          Devices apply it with \`dsh update --self\` (downloads this asset, ~40 KB,
+          compares signatures, applies only when different). \`dsh update --self
+          --dry-run\` reports whether an update is available. No dsh/npm download is
+          involved, and nothing else is published by this project.
+
+          Installer and updater scripts are NOT part of this asset: they come from the
+          repository checkout (\`bash scripts/00-setup.sh\`).
+          EOF
+          gh release create "$TAG" \
+            --title "patch set ${TAG#patches-}" \
+            --notes-file notes.md \
+            dsh-termux-patchset.tar.gz
+          echo "published $TAG with dsh-termux-patchset.tar.gz"

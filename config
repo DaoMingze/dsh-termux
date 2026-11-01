@@ -1,0 +1,28 @@
+# dsh-termux config — one file, read by both sides of the project:
+#   build/build-runtime.sh   what a release is built with
+#   scripts/00-setup.sh      what a device install uses
+# Plain key=value lines, parsed one per line (never sourced). scripts/
+# 01-setup-glibc-node.sh writes the installed facts back into this same file.
+
+# Node to install on the device / build a release with:
+#   lts          the ACTIVE LTS line (resolved to a concrete X.Y.Z)
+#   24           the newest patch of that major
+#   24.19.0      exactly that release
+# A device install can override it for one run with DSH_NODE_VERSION=...
+node_version=lts
+
+# dsh version from the npm registry: a dist-tag (latest | next | alpha) or an
+# exact version. A device install can override it with DSH_VERSION=...
+npm_version=latest
+
+# pnpm spec. Stay on the 10 line: pnpm >= 11 ships a platform native binary
+# behind an install script, which would add a second glibc executable to
+# support on the device for no gain. build/build-runtime.sh aborts loudly when
+# the installed layout has no pnpm.cjs, so a bump here fails at build time
+# rather than on a user's phone.
+pnpm_version=10
+
+# Written back by 01-setup-glibc-node.sh after a successful install — do not
+# edit by hand, these describe what is on disk right now.
+node_installed_version=
+node_bin=

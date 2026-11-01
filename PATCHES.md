@@ -4,8 +4,8 @@ This project runs upstream `dsh` inside Termux — from npm on the stable channe
 
 |Kind|What it means|Emitted by|
 |---|---|---|
-|**Patch**|edits the compiled npm `lib/*.js` files inside `node_modules`|`scripts/03-apply-patches.sh`, `scripts/update-dsh.sh`, `build/build-runtime.sh`|
-|**Environment fix**|no dsh code change — the launcher/installer changes the runtime or environment instead|`configure_glibc_node`, `write_dsh_wrapper`, `write_dsh_opener` in `scripts/common.sh` (sourced by `build/install.sh` from the tarball)|
+|**Patch**|edits the compiled npm `lib/*.js` files inside `node_modules`|`scripts/03-apply-patches.sh`, `scripts/update-dsh.sh`|
+|**Environment fix**|no dsh code change — the launcher changes the runtime or environment instead|`configure_glibc_node`, `write_dsh_wrapper`, `write_dsh_opener` in `scripts/common.sh`|
 
 Both families are guarded by CI: the environment fixes and the patch registry statically on every pull request (`verify.yml`), the patches themselves against a real npm install whenever their inputs change, on the release-bound pull request, and on demand (`patch-check.yml`; it has no cron — see AGENTS.md §4). The READMEs carry no fixes table — they only point here; this file is the single fix index (details in the section each row links to).
 
@@ -34,8 +34,7 @@ Both families are guarded by CI: the environment fixes and the patch registry st
 |---|---|
 |`scripts/03-apply-patches.sh` (setup pipeline)|`dsh_apply_patch_set` iterates the registry|
 |`scripts/update-dsh.sh` (updater)|same call — re-applies and verifies on update|
-|`build/build-runtime.sh` (release build)|same call — patches the shipped tree|
-|`build/install.sh`|applies nothing (the tarball ships pre-patched); unaffected|
+|`scripts/00-setup.sh` → `03`|same call — patches the freshly installed tree|
 |CI `patch-check.yml`|apply step calls `dsh_apply_patch_set`; the marker check and the regression-guard probe derive their targets from the registry|
 |CI `verify.yml`|static integrity check on every PR: each entry must resolve to a patch file that targets that rel path and adds that marker, and no patch file may go unregistered|
 |CI `release.yml`|tarball copies the whole `patches/` dir; the structure check derives its patch-file AND target-lib list from the registry|
@@ -137,7 +136,7 @@ It is deliberately not patched here, because the registry cannot express it: `DS
 
 `0.1.3`'s session lease took a POSIX `flock(2)` through **`fs-ext`** (`src/lease.ts:34`, imported at the top of the bundle), and `fs-ext@2.1.1` became a real dependency of `@deepseek-ai/dsh-session-persistence-jsonl` — `0.1.2-rc.1` mentions it nowhere. `fs-ext` shipped no prebuilds and no `binary` field; its `install` script was `node-gyp configure build`. **dsh 0.1.5 removed the dependency**: upstream folded the lease functionality in and ships its own prebuilt package — today no dsh dependency needs compiling.
 
-Every dsh install in this project runs npm with `--ignore-scripts` (`scripts/02-install-dsh.sh`, `scripts/update-dsh.sh`, `build/build-runtime.sh`, CI `patch-check`) — a policy that exists for koffi, whose linux-arm64 prebuild npm resolves without a build step anyway. On 0.1.3 that settled differently: nothing compiled `fs_ext.node`, and dsh died during boot, before any patch marker mattered:
+Every dsh install in this project runs npm with `--ignore-scripts` (`scripts/02-install-dsh.sh`, `scripts/update-dsh.sh`, CI `patch-check`) — a policy that exists for koffi, whose linux-arm64 prebuild npm resolves without a build step anyway. On 0.1.3 that settled differently: nothing compiled `fs_ext.node`, and dsh died during boot, before any patch marker mattered:
 
 ```text
 Error: Cannot find module './build/Release/fs_ext.node'
@@ -147,17 +146,17 @@ Require stack: .../node_modules/fs-ext/fs-ext.js
 
 First seen in `patch-check` at `@alpha` (run `34172320516`), then reproduced on a device through the channel-test sandbox — patches all green, web refusing to boot. **The fix shipped the compiled binary instead of stubbing the lease**: a stub would have silently dropped the lock that keeps two dsh processes from holding the same session — upstream's correctness boundary, not ours to remove.
 
-The machinery remains in the scripts to serve installs pinned to 0.1.3/0.1.4; on a dsh >= 0.1.5 tree it no-ops (`ensure_native_prebuilds` finds nothing missing and reports "no native addons required by this dsh build"):
+The **device-side fetch is gone** (2026-11-01): nothing on a phone downloads a prebuilt addon any more, because nothing on a phone needs one — dsh >= 0.1.5 has no dependency that requires compiling. What stays is the build-side compile and an after-the-fact check:
 
-- `native_prebuild_entries` in `scripts/common.sh` is the registry (`fs-ext:build/Release/fs_ext.node`, its only entry). Three consumers derive from it: `build_native_addons` (compile on a machine that has a toolchain — `build-runtime.sh` and CI `patch-check`), `ensure_native_prebuilds` (device overlay — `update-dsh.sh` and `02-install-dsh.sh` fetch `dsh-termux-natives.tar.gz` from the release whose tag names the installed dsh version), and `verify_native_prebuilds` (assert installed ⇒ artifact ⇒ loads; r2 runs it against the shipped tarball).
+- `native_prebuild_entries` in `scripts/common.sh` is the registry (`fs-ext:build/Release/fs_ext.node`, its only entry). Two consumers derive from it: `build_native_addons` (compile — only on a machine with a toolchain: `build-runtime.sh`, whose binary rides inside the release tarball, and CI `patch-check`, whose boot smoke needs it when dispatched against a pre-0.1.5 dsh) and `verify_native_prebuilds` (assert installed ⇒ artifact ⇒ loads; `02-install-dsh.sh` and `update-dsh.sh` run it after installing, r2 runs it against the shipped tarball).
 - The compile ends with a `require()` of the package by the very node that will run it — an ABI/platform mismatch is caught on the spot, not on a device an ocean away.
-- Termux has no glibc toolchain, so devices never compile; they fetch. That is also why `dsh update -t alpha` cannot self-assemble one.
+- A device install can only *fail* on this, never fix it: `02` and `update` stop with a sentence naming the cause and pointing at Option A, whose tarball carries the binary. The former `dsh-termux-natives.tar.gz` asset, its overlay and the CI step that published it no longer exist, so `dsh update -t alpha` no longer implies it can obtain one.
 
-Verified on device (2026-09-08): the CI-built `fs_ext.node` (linux-arm64 glibc, node 24.19.0) loads, **`flock(2)` works on Android app-private storage** (exclusive non-blocking acquire + unlock probed through the real addon), and `dsh web` on 0.1.3-alpha.2 boots and serves — 401 without the handshake token, 303 through it, exactly like the stable pages.
+Verified on device (2026-09-08, while the overlay still existed): the CI-built `fs_ext.node` (linux-arm64 glibc, node 24.19.0) loads, **`flock(2)` works on Android app-private storage** (exclusive non-blocking acquire + unlock probed through the real addon), and `dsh web` on 0.1.3-alpha.2 boots and serves — 401 without the handshake token, 303 through it, exactly like the stable pages.
 
 #### How the patches are applied
 
-Every caller — `scripts/03-apply-patches.sh`, `scripts/update-dsh.sh`, `build/build-runtime.sh` and `.github/workflows/patch-check.yml` — goes through `scripts/patch-lib.sh`, because applying these patches by hand has one sharp edge:
+Every caller — `scripts/03-apply-patches.sh`, `scripts/update-dsh.sh` and `.github/workflows/patch-check.yml` — goes through `scripts/patch-lib.sh`, because applying these patches by hand has one sharp edge:
 
 > `git apply` resolves patch paths against the top of the **enclosing git work tree** and silently drops every entry outside the current directory — it prints `Skipped patch '...'.` and still **exits 0**.
 
@@ -167,7 +166,7 @@ So the naive form
 (cd "$WORK_DIR" && git apply --directory=node_modules/@deepseek-ai patch)
 ```
 
-works on a device (the runtime lives outside any repo) but patches *nothing* when `$WORK_DIR` is inside a git checkout, as it is in CI and in `build/build-runtime.sh`'s default runtime dir — while reporting success.
+works on a device (the runtime lives outside any repo) but patches *nothing* when `$WORK_DIR` is inside a git checkout, as it is in CI — while reporting success.
 
 `dsh_apply_patch` avoids this by prepending the work dir's prefix inside the enclosing work tree and by comparing the target's content id before and after, so an apply that changes nothing fails instead of shipping unpatched libs.
 
@@ -382,11 +381,11 @@ Design notes:
 - **graceful degradation**: callers without an updater path get no branch emitted, so three-argument invocations behave byte-for-byte as before, and an install run by an OLD generator against a NEW caller ignores the surplus positional argument harmlessly (verified against the R1 baseline tarball);
 - if a future upstream release ever adds its own `dsh update`, this interception shadows it — drop the fourth argument (regenerate the wrapper) before reporting an upstream bug.
 
-Emitted by `write_dsh_wrapper` when given the optional updater path — all three emitters pass it (`04-launch.sh`, `update-dsh.sh`, `build/install.sh`). Not an environment fix strictly needed to *run* dsh: it is convenience built on the same single-source wrapper. Guarded by CI.
+Emitted by `write_dsh_wrapper` when given the optional updater path — both callers pass it (`04-launch.sh`, `update-dsh.sh`). Not an environment fix strictly needed to *run* dsh: it is convenience built on the same single-source wrapper. Guarded by CI.
 
 #### The updater is self-contained and self-updating
 
 The runtime bundles its own copy of the updater (`scripts/` + `patches/` + `VERSION` under the runtime root): Option A releases always shipped it, and since 1.2.1 Option B installs (`00-setup.sh`) copy it in before the wrapper is generated — so the wrapper's shortcut resolves the runtime-bundled updater first and no longer depends on the repo checkout staying put.
 
 npm updates move only the dsh version; the patch set moves with project releases. The updater closes that gap on two levels: every plain update compares the runtime's release identity with the latest GitHub release BEFORE touching npm and refreshes automatically when behind (the dsh version and the patch set then update in one command), and `dsh update --self` refreshes the machinery and **applies the refreshed patch set to the installed dsh directly** — no npm download or install. The refresh downloads the lightweight patch-set asset (`dsh-termux-patches.tar.gz`, ~40KB: the updater's three scripts + patches + VERSION — the whole bootstrap machinery, so future updater evolution travels with it), falling back to extracting those members from the full runtime tarball on releases without the
-asset. `--patch-set <dir|tar.gz>` takes the same set from a local source (offline; `build/build-patchset.sh` produces the asset layout), and `--force` re-applies when the content is unchanged. Runtimes from before 1.2.1 have no `VERSION` to compare: they keep updating via npm with their old patch set (plus a notice) — reinstalling gains the self-update machinery.
+`--patch-set <dir|tar.gz>` takes the same set from an explicit directory or tarball, and `--force` re-applies when the content is unchanged. The published channel is the same set as a ~40 KB release asset (`dsh-termux-patchset.tar.gz`), fetched by `--self` and compared by content signature; `--dry-run` reports whether the runtime is behind.

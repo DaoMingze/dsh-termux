@@ -6,6 +6,7 @@ downloads/
 *.tgz
 # Release asset built locally by build/build-patchset.sh
 dsh-termux-patches.tar.gz
+dsh-termux-patchset.tar.gz
 
 # Session scratch space for ad-hoc agent debugging (repro scripts, pristine
 # npm copies, shadow node_modules). Never tracked; never holds anything the
@@ -37,7 +38,6 @@ dsh-termux-patches.tar.gz
 # Legacy alias that the original AGENTS.md ignore also covered
 AGENT.md
 .workbuddy
-.agents/skills
-.aisa
+.agents
 conventions/
 .patch-probe/

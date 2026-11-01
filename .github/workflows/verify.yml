@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v7
 
       # Every tracked shell script — including scripts/update-dsh.sh, the
-      # scripts/0x-* pipeline, build/build-runtime.sh and the .test-install
+      # scripts/0x-* pipeline and the .test-install
       # harness, none of which had any CI coverage before the split.
       - name: Shell syntax (bash -n)
         run: |
@@ -237,40 +237,18 @@ jobs:
           rm -rf wrapper-check
           echo "OK: opener routes URLs to termux-open-url and paths to termux-open"
 
-      # install.sh sources the shared helpers straight out of the release
-      # tarball (scripts/common.sh — the same file update-dsh.sh runs on-device),
-      # so there is no second copy of the configure/wrapper/opener logic to
-      # drift. Guard against re-introducing one: install.sh must delegate to the
-      # common.sh functions and own NO inline copies; and the --set-rpath
-      # segfault trap must only ever live where the interpreter is patched.
-      - name: Verify install.sh delegates to common.sh (no duplicated logic)
+      # configure_glibc_node patches ONLY the interpreter: adding --set-rpath
+      # in the same patchelf run yields a segfaulting Node binary. Comments may
+      # name the flag (they explain the trap), so only code lines are checked.
+      - name: common.sh patches the ELF interpreter and nothing else
         run: |
           set -euo pipefail
-          grep -qF 'source "$PREFIX/scripts/common.sh"' build/install.sh \
-            || { echo "FAIL: install.sh does not source scripts/common.sh"; exit 1; }
-          grep -qF 'configure_glibc_node "$NODE_BIN"' build/install.sh \
-            || { echo "FAIL: install.sh does not call configure_glibc_node"; exit 1; }
-          grep -qF 'write_dsh_wrapper "$WRAPPER" "$NODE_BIN" "$DSH_BIN"' build/install.sh \
-            || { echo "FAIL: install.sh does not call write_dsh_wrapper"; exit 1; }
-          grep -qF 'ensure_bin_dir_on_path "$BIN_DIR"' build/install.sh \
-            || { echo "FAIL: install.sh does not call ensure_bin_dir_on_path"; exit 1; }
-          # Function definitions, heredocs and the interpreter patch live in
-          # scripts/common.sh only — none of these may appear in install.sh.
-          for sig in 'configure_glibc_node()' 'write_dsh_wrapper()' 'write_dsh_opener()' \
-                     'DSH_OPENER' 'DSH_WRAPPER_HEAD' '--set-interpreter'; do
-            if grep -qF "$sig" build/install.sh; then
-              echo "FAIL: install.sh contains duplicated '$sig' (should live only in scripts/common.sh)"; exit 1
-            fi
-          done
-          # configure_glibc_node patches ONLY the interpreter: adding --set-rpath
-          # in the same patchelf run yields a segfaulting Node binary. Comments
-          # may name the flag (they explain the trap), so only check code lines.
           grep -qF -- '--set-interpreter' scripts/common.sh \
             || { echo "FAIL: scripts/common.sh does not set the ELF interpreter"; exit 1; }
           if grep -v '^[[:space:]]*#' scripts/common.sh | grep -qF -- '--set-rpath'; then
             echo "FAIL: scripts/common.sh uses --set-rpath; combined with --set-interpreter that segfaults Node"; exit 1
           fi
-          echo "OK: install.sh delegates to common.sh; --set-rpath trap guarded"
+          echo "OK: interpreter patched, --set-rpath trap guarded"
 
       # update-dsh.sh derives its help from the '# help-begin' / '# help-end'
       # sentinels in its own header. This step owns the other half of that
@@ -306,22 +284,29 @@ jobs:
             || { echo "FAIL: -h output and the help-begin/help-end block have drifted apart"; exit 1; }
           echo "OK: help is derived from the sentinels and documents every flag"
 
-      # The patch-set asset layout has ONE source (build/build-patchset.sh):
-      # release.yml calls it, and --patch-set consumes its output. Assert the
-      # fixed members are present and the tools/ symlink resolves.
-      - name: Patch-set packer members (build-patchset.sh)
+      # The patch set is the only thing this project publishes, and its member
+      # list lives in build/build-patchset.sh. A member list that drifts from
+      # what the updater expects breaks devices silently (the asset still
+      # downloads, it just applies nothing useful), so assert the shape here:
+      # the updater's three scripts, at least one patch, and NO VERSION member
+      # (identity is the content signature).
+      - name: Published patch set has the expected members
         run: |
           set -euo pipefail
           out="$(bash build/build-patchset.sh --list)"
-          for m in scripts/update-dsh.sh scripts/common.sh scripts/patch-lib.sh VERSION; do
-            grep -qx "$m" <<< "$out" || { echo "FAIL: $m missing from --list"; exit 1; }
+          for m in scripts/update-dsh.sh scripts/common.sh scripts/patch-lib.sh; do
+            grep -qx "$m" <<<"$out" || { echo "FAIL: $m missing from the patch-set member list"; exit 1; }
           done
-          grep -q '^patches/.*\.patch$' <<< "$out" || { echo "FAIL: --list names no patches"; exit 1; }
-          [ -L .test-install/tools/build-patchset.sh ] \
-            || { echo "FAIL: .test-install/tools/build-patchset.sh is not a symlink"; exit 1; }
-          target="$(readlink -f .test-install/tools/build-patchset.sh)"
-          [ -f "$target" ] || { echo "FAIL: symlink target missing: $target"; exit 1; }
-          echo "OK: patch-set packer members + tools symlink"
+          grep -q '^patches/.*\.patch$' <<<"$out" || { echo "FAIL: no patch file in the member list"; exit 1; }
+          if grep -qx 'VERSION' <<<"$out"; then
+            echo "FAIL: VERSION is back in the patch set; identity must stay content-based"; exit 1
+          fi
+          # The asset name is a contract with the updater's download URL.
+          grep -qF 'dsh-termux-patchset.tar.gz' build/build-patchset.sh \
+            || { echo "FAIL: the asset name changed; update scripts/update-dsh.sh too"; exit 1; }
+          grep -qF 'releases/latest/download/dsh-termux-patchset.tar.gz' scripts/update-dsh.sh \
+            || { echo "FAIL: the updater does not download the published asset name"; exit 1; }
+          echo "OK: patch-set members, no VERSION, asset name consistent"
 
       # The sandbox routes themselves cannot run here (they need Termux, glibc
       # and a real device — see AGENTS.md §0), but the harness ENTRY POINT can:

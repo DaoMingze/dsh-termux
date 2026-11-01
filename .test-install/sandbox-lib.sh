@@ -94,7 +94,7 @@ SANDBOX_UNSET_LIST=(LD_PRELOAD LD_LIBRARY_PATH NODE_OPTIONS NODE_REPL_EXTERNAL_M
 # 脚本侧消费的 DSH_* 也纳入清洗, 防调用者 export 渗入改变被测行为;
 # 运行时侧的 DSH_HOME/DSH_LAUNCH_ENVIRONMENT_KEY/DSH_TELEMETRY_DISABLED 不在此列——
 # 前者由 sandbox_init/serve 显式重建, 后两者属运行时用户意图, 清除反而是行为改变。
-SANDBOX_DSH_UNSET_LIST=(DSH_ASSUME_YES DSH_WEB_PORT DSH_PATCH_SET DSH_UPDATE_TAG DSH_R4_TAG DSH_NODE_VERSION DSH_RELEASE DSH_RELEASE_TARBALL DSH_REPO DSH_PROFILE)
+SANDBOX_DSH_UNSET_LIST=(DSH_ASSUME_YES DSH_WEB_PORT DSH_PATCH_SET DSH_UPDATE_TAG DSH_R4_TAG DSH_NODE_VERSION DSH_RELEASE DSH_REPO DSH_PROFILE DSH_CONFIG_FILE DSH_ROOT)
 env_sanitize() { unset "${SANDBOX_UNSET_LIST[@]}" "${SANDBOX_DSH_UNSET_LIST[@]}" 2>/dev/null || true; }
 
 write_grun_stub() {
@@ -114,7 +114,7 @@ sandbox_init() {
 	[ "${1:-}" = "--work" ] && do_work=1
 	# 沙箱根锚定在脚本自身位置而非 $PWD: routes 可被绕过 run.sh 直接调用, CWD 不可信;
 	# 而 rm -rf 发生在任何断言之前 —— 位置错了就会删到别处的同名沙箱 (AGENTS §3 同类事故)。
-	[ -f "$TI_ROOT/../build/install.sh" ] || fail "请在仓库根目录运行 (build/install.sh 不存在)"
+	[ -f "$TI_ROOT/../scripts/00-setup.sh" ] || fail "请在仓库根目录运行 (scripts/00-setup.sh 不存在)"
 	# 并发防护: r4/r5 共用 sandbox-<name>/, 后启动者会 rm -rf 掉前者正在用的沙箱
 	# (症状=随机假红, 难归因——testsystem 审计 H1)。flock 锁随进程退出自动释放,
 	# 无陈锁问题; -n 冲突立即人话报错, 而不是互删或挂起。

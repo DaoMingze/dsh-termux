@@ -18,10 +18,10 @@ Upstream dsh has only `web` and `plugin` as top-level subcommands, so the Termux
 
 `dsh update` moves the **dsh npm version**. The **patch set** (and the updater itself) evolves with project releases instead — new or changed patches ship inside new releases of this project, not via npm. Two paths keep them in sync:
 
-- **Automatic (plain `dsh update`)** — before touching npm, every run compares your runtime's bundled `VERSION` with the latest GitHub release and, when behind, refreshes the machinery: it downloads the lightweight patch-set asset (~40 KB: the updater's own scripts + patches + `VERSION`), replaces those inside the runtime, and re-runs the update with the fresh set. The refresh continues into the normal npm flow, where the fresh patches are applied to the newly installed dsh.
-- **`dsh update --self` (patches only)** — refreshes the same machinery and then **applies the refreshed patch set to the installed dsh directly**, with no npm download or install. Because there is no reinstall to restore pristine files, the updater first reverses the previously applied set with its own bytes, then applies the new one. When the machinery content is already current it reports that and stops (`--force` re-applies anyway). `--patch-set <dir|tar.gz>` takes the set from a local source instead of GitHub — offline, for development and testing; build one with `build/build-patchset.sh`, which produces exactly the release asset layout. `--self` ignores `-t`/`-v` (it never moves the dsh version); use plain `dsh update` for that.
+- **Plain `dsh update`** — moves the dsh version and re-applies the patch set the runtime carries. Nothing on this path talks to GitHub: the patch set only changes when you `git pull` in your checkout and re-run `scripts/00-setup.sh` (or `scripts/03-apply-patches.sh`), which copies the checkout's patches into the runtime and applies them.
+- **`dsh update --self` (patches only)** — downloads the published patch set (`dsh-termux-patchset.tar.gz`, ~40 KB), compares its content signature with the runtime's and **applies it directly** to the installed dsh when they differ — no npm, Node or glibc download. Because there is no reinstall to restore pristine files, the updater first reverses the previously applied set with its own bytes, then applies the new one. `--dry-run` reports whether an update exists; `--force` re-applies even when the signatures match. `--patch-set <dir|tar.gz>` takes the set from an explicit directory or tarball instead of the one next to the updater — for development and testing. `--self` ignores `-t`/`-v` (it never moves the dsh version); use plain `dsh update` for that.
 
-Runtimes from releases before 1.2.1 have no `VERSION` to compare and no patch-set asset to fetch: updates proceed with the old patch set (with a notice), and gaining the self-update machinery requires reinstalling via the release one-liner (README [Option A](README.md#installation)).
+Runtimes installed from the retired prebuilt releases still work for npm updates; gaining the current machinery means reinstalling with `scripts/00-setup.sh` (README [Installation](README.md#installation)).
 
 Both install options end up self-contained: the runtime bundles the updater and patches, so `dsh update` keeps working even if the repo checkout (Option B) is later moved or deleted. The updater never restarts a running `dsh web` — start/restart it yourself, which keeps the updater side-effect free. If a new dsh version changed the patched files so the patches no longer apply, the updater fails loudly and stops; that means the patches need regenerating, see [PATCHES.md](PATCHES.md).
 
@@ -29,26 +29,24 @@ Both install options end up self-contained: the runtime bundles the updater and 
 
 The repo's iron rule (AGENTS.md §0): **agent-run tests are necessary but never sufficient**. Anything that lands on a real device (install, update, patches, browser handoff) must be verified by a human on a real Termux device before merge or release; otherwise it is labeled "未实测" (untested).
 
-- Automated layer: `bash .test-install/run.sh all` (= r1+r2+r4+r5+r6) is the delivery gate; daily iteration is `run.sh r1`; the six routes and what each asserts are documented in [.test-install/README.md](.test-install/README.md).
+- Automated layer: `bash .test-install/run.sh all` (= r4) is the delivery gate; changes to the install pipeline add `--with-r3`. Both routes and what each asserts are documented in [.test-install/README.md](.test-install/README.md).
 - Human layer: `bash .test-install/serve.sh` runs the gate, then serves a sandbox `dsh web` (port 3141) for an on-device checklist. Sandboxes must never touch the live `~/.local/opt/dsh-termux-runtime/`, `~/.local/bin/dsh`, `~/.bashrc` or `~/.dsh/`.
-- Per-change-type gates are tabulated in AGENTS.md §5 (e.g. `update-dsh.sh` ⇒ r4+r5+r6; patches/`patch-lib.sh` ⇒ CI verify + patch-check + r4 + r5; `00-setup.sh` pipeline ⇒ r3).
+- Per-change-type gates are tabulated in AGENTS.md §5 (e.g. `update-dsh.sh` ⇒ r4; patches/`patch-lib.sh` ⇒ CI verify + patch-check + r4; `00-setup.sh` pipeline ⇒ r3).
 - Merge trail: after the human confirms, append a `Tested-by:` line generated by `bash .test-install/tools/tb.sh "<coverage>"`, or let `bash .test-install/tools/pr-merge.sh <PR> "<coverage>"` do the merge and write it into the merge commit (AGENTS.md §6.3).
 
 ## CI
 
 | Workflow | When it runs | What it does |
 |---|---|---|
-| `verify.yml` | every PR / push to main, no npm install, <1 min | `bash -n` + ShellCheck over all tracked `*.sh`, patch-registry integrity, wrapper/`$BROWSER` generator tests, `install.sh` delegation guard, updater help-sentinel contract, test-harness entry/route registration, doc links/anchors (`.github/scripts/check-doc-links.py`) |
-| `patch-check.yml` | when `patches/`, `scripts/patch-lib.sh` or `NODE_VERSION` change; manual dispatch | installs dsh from npm, applies the patch set, checks markers, regression guards, boot smoke (~16 min, mostly npm) |
-| `release.yml` | manual dispatch (a push to main no longer releases) | builds and publishes the release; the dispatch's `tag` input is the version declaration (`dsh-<bundled dsh version>-<project version>`), fails if the tag exists |
-| `pre-release.yml` | manual only | builds from the upstream dsh **source tree** and publishes a prerelease (pre channel); never touches `releases/latest` or the patch-set asset, so `--self` stays stable-channel-only |
+| `verify.yml` | every PR / push to main, no npm install, <1 min | `bash -n` + ShellCheck over all tracked `*.sh`, patch-registry integrity, wrapper/`$BROWSER` generator tests, the `common.sh` interpreter guard, updater help-sentinel contract, test-harness entry/route registration, doc links/anchors (`.github/scripts/check-doc-links.py`) |
+| `release.yml` | when `patches/`, `scripts/patch-lib.sh` or `build/build-patchset.sh` change; manual dispatch | packs and publishes `dsh-termux-patchset.tar.gz` only (no node/npm, ~1 min); skips when that tag already exists |
+| `patch-check.yml` | when `patches/`, `scripts/patch-lib.sh` or `config` change; manual dispatch | installs dsh from npm, applies the patch set, checks markers, regression guards, boot smoke (~16 min, mostly npm) |
 
-`main` branch protection requires only the `static` check; `patch-check`/`pre-release` deliberately have no cron (see AGENTS.md §4 for why).
+`main` branch protection requires only the `static` check; `patch-check` deliberately has no cron (see AGENTS.md §4 for why).
 
 ## Releases and versioning
 
-- The project version is DERIVED, not stored: a release tag `dsh-<bundled dsh version>-<VERSION>` carries it, and every consumer (release notes, the runtime's `VERSION` file, the patch-set asset, the test harness) derives it from a tag's trailing segment.
-- Releases are manual: dispatch `release.yml` with the `tag` input (`dsh-<bundled dsh version>-<new project version>`). A push to main no longer releases. To bundle a specific dsh version, set the `DSH_RELEASE_SPEC` repository variable or pass the `dsh_version` input: `gh variable set DSH_RELEASE_SPEC --body '@deepseek-ai/dsh@0.1.5-alpha.1'`.
+- **Only the patch set is published.** `release.yml` packs `dsh-termux-patchset.tar.gz` (the updater's three scripts + `patches/*.patch`) and releases it whenever `patches/**`, `scripts/patch-lib.sh` or the packer changes, tagging `patches-<YYYYMMDD>-<sha7>`. There is no installable runtime artifact, no `VERSION` file and no tag-derived project version: a patch set's identity is its content signature (`dsh_patch_set_signature`).
 - Pick a project version **when dispatching the release** (it lives in the tag, nowhere else) — there is no version-bump commit to keep separate anymore (AGENTS.md §6.6).
 - After each release, re-pin the test baseline: `bash .test-install/run.sh baseline set <tag|latest>` — never hand-edit `baseline.env`.
 

@@ -3,7 +3,7 @@
 # pipeline (01 -> 02 -> 03 -> 04).
 #
 #   01  Termux prerequisites + glibc Node, registered as node/npm/npx(/pnpm)
-#   02  dsh from npm (--ignore-scripts) + prebuilt native addons
+#   02  dsh from npm (--ignore-scripts) + native-addon check (no fetch)
 #   03  dsh tree check + the patches matching that dsh version
 #   04  the `dsh` command, then launch a profile (default web)
 #
@@ -45,10 +45,11 @@ echo "==> dsh-termux installer"
 echo "    mode: ${MODE}   assume-yes: ${DSH_ASSUME_YES}"
 
 # --- Environment configuration --------------------------------------------
-# Node 来源: 空 = 01 从 release tarball 里取 node (与发布物的原生件同一份构建,
-# ABI 不会错配); 非空 (lts | 24 | 24.19.0) = 从 nodejs.org 取该版本。
-# 仓库 NODE_VERSION 文件只作用于构建侧 (release 用哪个 node), 设备侧继承其结果。
-DEF_NODE_VERSION="${DSH_NODE_VERSION:-}"
+# Node 统一从 nodejs.org 取: 版本取值优先级 = $DSH_NODE_VERSION > 仓库 config 的
+# node_version (=lts, 当前 active LTS 线) > "lts"。设备侧不下载本项目的 release
+# 产物; 01 装完会把实际版本与 node 路径写回 config。
+DEF_NODE_VERSION="${DSH_NODE_VERSION:-$(dsh_config_get node_version)}"
+DEF_NODE_VERSION="${DEF_NODE_VERSION:-lts}"
 DEF_RUNTIME_DIR="${DSH_RUNTIME_DIR:-$HOME/.local/opt/dsh-termux-runtime}"
 DEF_WORK_DIR="${DSH_WORK_DIR:-}"
 DEF_PORT="${DSH_WEB_PORT:-3080}"
@@ -60,7 +61,7 @@ if [ "$MODE" = "interaction" ]; then
 	echo "==> Configure environment (Enter accepts the default)"
 	ask_input DSH_RUNTIME_DIR "Runtime dir (space-free absolute path)" \
 		"$DEF_RUNTIME_DIR" validate_abs_path
-	ask_input DSH_NODE_VERSION "Node from nodejs.org (empty = from the release tarball)" \
+	ask_input DSH_NODE_VERSION "Node spec (lts | 24 | X.Y.Z)" \
 		"$DEF_NODE_VERSION" validate_node_version
 	ask_input DSH_WORK_DIR "Work dir (empty = \$DSH_RUNTIME_DIR/work)" \
 		"$DEF_WORK_DIR" validate_abs_path
@@ -96,12 +97,10 @@ lts*)
 esac
 
 export DSH_RUNTIME_DIR DSH_NODE_VERSION DSH_WORK_DIR DSH_WEB_PORT DSH_BIN_DIR DSH_PROFILE
-export DSH_RELEASE="${DSH_RELEASE:-latest}"
 export DSH_ASSUME_YES
 echo "==> Using:"
 echo "    DSH_RUNTIME_DIR = $DSH_RUNTIME_DIR"
-echo "    DSH_NODE_VERSION = ${DSH_NODE_VERSION:-<from the release tarball>}"
-echo "    DSH_RELEASE     = ${DSH_RELEASE:-latest}"
+echo "    DSH_NODE_VERSION = $DSH_NODE_VERSION"
 echo "    DSH_WORK_DIR    = $DSH_WORK_DIR"
 echo "    DSH_WEB_PORT    = $DSH_WEB_PORT"
 echo "    DSH_BIN_DIR     = $DSH_BIN_DIR"
@@ -117,41 +116,24 @@ bash "$BASE_DIR/scripts/01-setup-glibc-node.sh" || exit $?
 bash "$BASE_DIR/scripts/02-install-dsh.sh" || exit $?
 bash "$BASE_DIR/scripts/03-apply-patches.sh" || exit $?
 
-# --- Make the runtime self-contained (Option A parity) ----------------------
+# --- Make the runtime self-contained ----------------------------------------
 # Copy the updater, its helper libs and the patch set INTO the runtime dir
 # BEFORE 04 runs: the wrapper's `dsh update` shortcut then resolves the
 # runtime-bundled copy (see 04-launch.sh and write_dsh_wrapper) and keeps
-# working even if this repo checkout is later moved or deleted. Option A
-# release installs ship this exact layout in their tarball; this brings
-# Option B installs to the same shape.
-# VERSION rides along: the updater compares it against the latest GitHub
-# release to tell the user when their PATCH SET (not just the dsh npm version)
-# is outdated — new patches ship in new project releases, not via npm.
+# working even if this checkout is later moved or deleted. `dsh update --self`
+# applies that bundled set; re-running this script after `git pull` refreshes
+# it from the checkout.
 echo "==> Bundling updater + patches into the runtime dir"
 mkdir -p "$DSH_RUNTIME_DIR/scripts"
 cp "$BASE_DIR/scripts/update-dsh.sh" "$BASE_DIR/scripts/common.sh" \
 	"$BASE_DIR/scripts/patch-lib.sh" "$DSH_RUNTIME_DIR/scripts/"
 rm -rf "$DSH_RUNTIME_DIR/patches"
 cp -r "$BASE_DIR/patches" "$DSH_RUNTIME_DIR/patches"
-# 仓库项目 VERSION 已派生化（VERSION 文件退役，版本由 release tag 携带）：
-# repo checkout 里没有 VERSION 文件时，从最新 dsh-*-* tag 尾段恢复——runtime
-# 里的这份 VERSION 是更新器比对补丁集新鲜度的依据，缺了不行。
-if [ -f "$BASE_DIR/VERSION" ]; then
-	cp "$BASE_DIR/VERSION" "$DSH_RUNTIME_DIR/VERSION"
-else
-	PV_DERIVED="$(git -C "$BASE_DIR" tag --list 'dsh-*-*' --sort=-v:refname 2>/dev/null | head -1 | sed 's/.*-//' || true)"
-	[ -n "$PV_DERIVED" ] || {
-		echo "!! cannot derive the project VERSION (no $BASE_DIR/VERSION and no dsh-*-* git tag)" >&2
-		exit 1
-	}
-	printf '%s\n' "$PV_DERIVED" >"$DSH_RUNTIME_DIR/VERSION"
-	echo "    Project VERSION: $PV_DERIVED (derived from the newest dsh-*-* git tag)"
-fi
 echo "    Updater bundled: $DSH_RUNTIME_DIR/scripts/update-dsh.sh"
 echo "    Patch set:       $DSH_RUNTIME_DIR/patches ($(
 	set -- "$DSH_RUNTIME_DIR"/patches/*.patch
 	[ -e "$1" ] && echo "$#" || echo 0
-) patches, project $(cat "$DSH_RUNTIME_DIR/VERSION"))"
+) patches)"
 
 bash "$BASE_DIR/scripts/04-launch.sh" || exit $?
 

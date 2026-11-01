@@ -38,14 +38,14 @@ on:
       - 'patches/**'
       - 'scripts/patch-lib.sh'
       # The boot smoke runs under this Node; a version bump must be re-smoked.
-      - 'NODE_VERSION'
+      - 'config'
       - '.github/workflows/patch-check.yml'
   push:
     branches: [main]
     paths:
       - 'patches/**'
       - 'scripts/patch-lib.sh'
-      - 'NODE_VERSION'
+      - 'config'
       - '.github/workflows/patch-check.yml'
   workflow_dispatch:
     inputs:
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           # 主机 node 只需能跑 npm 与补丁校验, 与实际运行时无关: 运行时的 node
-          # 单一事实源是仓库根 NODE_VERSION 文件 (现为 "lts", 由 scripts/
+          # 单一事实源是仓库根 config 的 node_version (现为 "lts", 由 scripts/
           # common.sh 的 resolve_node_version 解析), 而 setup-node 读不懂裸
           # "lts", 所以这里直接跟 active LTS 线。
           node-version: lts/*
@@ -102,15 +102,16 @@ jobs:
           source scripts/patch-lib.sh
           dsh_apply_patch_set "$GITHUB_WORKSPACE/work" "$GITHUB_WORKSPACE/patches"
 
-      # dsh >= 0.1.3 imports flock(2) from fs-ext (no prebuilds, node-gyp);
-      # --ignore-scripts leaves it unbuilt and the boot smoke below dies in the
-      # plugin loader. The runner has the toolchain, so build here. The registry
-      # and packaging live in the reusable action (scripts/common.sh underneath).
+      # A dsh pinned below 0.1.5 imports flock(2) from fs-ext (no prebuilds,
+      # node-gyp); --ignore-scripts leaves it unbuilt and the boot smoke below
+      # would die in the plugin loader. The runner has the toolchain, the device
+      # does not — so compiling happens here and nowhere else (the registry is
+      # native_prebuild_entries in scripts/common.sh).
       - name: Build native addons without prebuilds
-        uses: ./.github/actions/build-natives
-        with:
-          work-dir: ${{ github.workspace }}/work
-          node-bin: node
+        run: |
+          set -euo pipefail
+          source scripts/common.sh
+          build_native_addons "$GITHUB_WORKSPACE/work" node npm
 
       - name: Verify patched markers present
         run: |

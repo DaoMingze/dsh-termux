@@ -1,5 +1,5 @@
 ---
-template_version: 0.5.6
+template_version: 0.5.8
 template_status: stable
 ---
 

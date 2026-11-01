@@ -1,9 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # r3-setup.sh — R3 setup 管线测试: 驱动工作区 scripts/00-setup 流水线（拆步调用）。
-# [01] 真机 pkg 前置 + nodejs.org 官方 node + glibc 补丁 + node/npm shim 注册
+# [01] 真机 pkg 前置 + nodejs.org 官方 node (版本取自仓库 config 的 node_version) + glibc
+#      补丁 + node/npm shim 注册
 #      -> [02] npm 装 @deepseek-ai/dsh (--ignore-scripts)
 #      -> [03] dsh 树体检 + 补丁集 -> [04] wrapper/opener/symlink + profile 启动。
-# 这是与 build/install.sh 并行的第二种安装方案 (dsh 来自 npm registry, 不经 tarball)。
+# 这是本项目**唯一**的安装路径: dsh 来自 npm registry, node 来自 nodejs.org,
+# 补丁来自这个 checkout —— 没有预构建产物可装。
+# 设备侧不下载本项目自己的 release 产物: node 只从 nodejs.org 取, 由本路线的
+# 下载+sha256/GPG 验签+patchelf 断言覆盖。
 # 需要网络: npm registry + nodejs.org。注意 [02] 冷装全量解析约 20min+ 才可能完成
 # (依赖图在 arm64 冷解析的正常耗时; 先跑过一次 r4 会热缓存), 别误判为挂死。
 set -uo pipefail
@@ -33,9 +37,16 @@ done
 ok "pkg 前置齐备 (glibc/glibc-repo/gnupg + grun/patchelf/gpg)"
 
 sandbox_init "${DSH_SANDBOX:-setup}" --work
-export DSH_NODE_VERSION="24.19.0" # r3 自己钉死被测 node 版本 (仓库默认是 lts = active
-# LTS 线, 会随上游换代而变; 测试要可复现, 所以这里显式给精确版本, 不跟仓库默认值)。
-# 基线 node 已补丁, 这里取的是官方原版, 顺便验证 01 的下载+patchelf 链路。
+# 01 会把装完的版本与 node 路径写回 config, 所以这里用沙箱内副本: 测试绝不改仓库里
+# 那份受跟踪的 config。副本同时让「读 config」的断言有确定输入。
+CFG="$ROOT/config"
+cp "$TI_ROOT/../config" "$CFG" || fail "cannot stage config into the sandbox"
+export DSH_CONFIG_FILE="$CFG"
+export DSH_NODE_VERSION="24.19.0" # r3 自己钉死被测 node 版本 (仓库 config 的
+# node_version 是 lts = active LTS 线, 会随上游换代而变; 测试要可复现, 所以这里
+# 显式给精确版本, 并顺便覆盖「DSH_NODE_VERSION 优先于 config」这条优先级)。
+# 这里取的是官方原版 (基线 tarball 里的 node 已打过补丁), 顺便验证 01 的下载+验签+
+# patchelf 链路 —— 这也是设备侧唯一的 node 来源, 所以本节没有备选路径可退回。
 # 被测 dsh 渠道由调用者用 DSH_VERSION 指定 (npm spec, 默认 @deepseek-ai/dsh@latest,
 # 见 scripts/02-install-dsh.sh); DSH_SANDBOX 指名沙箱 (默认 setup)。
 # serve.sh 的 DSH_TARGET=<dist-tag> 就靠这两个构建「工作区补丁集 × 非稳定渠道」。
@@ -73,59 +84,31 @@ SVER="$("$ROOT/bin/node" --version 2>"$ROOT/shim-node-err.log")" ||
 	}
 ok "[01] node/npm/npx shim + bashrc PATH 就位 (shim node $SVER)"
 
-echo "=== 1b. [01] 默认路径: node 取自 release tarball (离线, 用基线资产) ==="
-# 01 的默认 node 来源是 release 运行时 tarball (与发布物的原生件同一次构建);
-# 上面 §1 走的是 nodejs.org 覆盖路径 (DSH_NODE_VERSION)。这里用基线 tarball 当
-# 「本地已下载的发布物」(DSH_RELEASE_TARBALL) 来验默认路径: 解包 node/ + 打
-# interpreter + marker, 全程不联网。基线资产不在场或哈希不符时只记 note, 不让
-# r3 依赖一次 100MiB 下载才能跑。
-rel_asset_ok=0
-if [ -f "$TARBALL" ]; then
-	if [ "$(sha256sum "$TARBALL" | awk '{print $1}')" = "$TARBALL_SHA256" ]; then
-		rel_asset_ok=1
-	else
-		note "基线 tarball 哈希与 baseline.env 不符, 跳过 [01b] (先 run.sh baseline set)"
-	fi
-fi
-if [ "$rel_asset_ok" = 1 ]; then
-	REL_PREFIX="$ROOT/prefix-rel"
-	REL_BIN="$ROOT/bin-rel"
-	DSH_RUNTIME_DIR="$REL_PREFIX" DSH_BIN_DIR="$REL_BIN" \
-		DSH_RELEASE="$BASELINE_TAG" DSH_RELEASE_TARBALL="$TARBALL" \
-		bash "$TI_ROOT/../scripts/01-setup-glibc-node.sh" -y >"$ROOT/01b.log" 2>&1 ||
-		{
-			cat "$ROOT/01b.log"
-			fail "[01b] exited non-zero"
-		}
-	REL_NODE="$REL_PREFIX/node/bin/node"
-	[ -x "$REL_NODE" ] || fail "[01b] node missing in $REL_PREFIX"
-	readelf -l "$REL_NODE" | grep -q 'ld-linux-aarch64.so.1' || fail "[01b] extracted node not glibc-patched"
-	REL_V="$("$REL_NODE" --version 2>"$ROOT/01b-node-err.log")" ||
-		{
-			cat "$ROOT/01b-node-err.log" >&2
-			fail "[01b] extracted node won't run"
-		}
-	# marker 决定复用: 必须是具体 tag, 否则下次跑永远判「同一来源」
-	got_marker="$(cat "$REL_PREFIX/.node-source" 2>/dev/null)"
-	[ "$got_marker" = "release:$BASELINE_TAG" ] ||
-		fail "[01b] .node-source=$got_marker (expected release:$BASELINE_TAG)"
-	[ -x "$REL_BIN/node" ] || fail "[01b] shim 未注册到独立 bin dir"
-	ok "[01b] node 取自 release tarball ($REL_V), marker=$got_marker"
+# [01] 收尾把实情写回 config: node_version 是**输入**, 必须原样保留 (否则下次安装
+# 就不再跟随 lts); node_installed_version / node_bin 记录磁盘上的现状。
+[ -f "$CFG" ] || fail "[01] config 不见了: $CFG"
+cfg_get() { sed -n "s/^$1=//p" "$CFG" | tail -1; }
+[ "$(cfg_get node_version)" = "lts" ] ||
+	fail "[01] 把输入 node_version 改成了 $(cfg_get node_version) (应为 lts)"
+[ "$(cfg_get node_installed_version)" = "${NV#v}" ] ||
+	fail "[01] config node_installed_version=$(cfg_get node_installed_version) (expected ${NV#v})"
+[ "$(cfg_get node_bin)" = "$NODE" ] ||
+	fail "[01] config node_bin=$(cfg_get node_bin) (expected $NODE)"
+ok "[01] config 写回: node_version 未被动 + installed/bin 已记录"
 
-	# 二次运行必须走复用, 不再解包 (标记 + 可运行 = 复用条件)
-	DSH_RUNTIME_DIR="$REL_PREFIX" DSH_BIN_DIR="$REL_BIN" \
-		DSH_RELEASE="$BASELINE_TAG" DSH_RELEASE_TARBALL="$TARBALL" \
-		bash "$TI_ROOT/../scripts/01-setup-glibc-node.sh" -y >"$ROOT/01c.log" 2>&1 ||
-		{
-			cat "$ROOT/01c.log"
-			fail "[01c] rerun exited non-zero"
-		}
-	grep -q 'Reusing the Node already taken from release' "$ROOT/01c.log" ||
-		fail "[01c] 二次运行没有复用已解包的 node"
-	ok "[01b] 二次运行复用已解包的 node (无重复解包)"
-else
-	note "基线 tarball 不在场, 跳过 [01b] release 取 node 路径 (先跑 run.sh r2 或 baseline set 取资产)"
-fi
+echo "=== 1c. [01] env 未设时读 config 的 node_version, 版本已满足则复用 (不下载) ==="
+sed -i "s/^node_version=.*/node_version=24.19.0/" "$CFG" ||
+	fail "[01c] 无法改写沙箱 config"
+env -u DSH_NODE_VERSION bash "$TI_ROOT/../scripts/01-setup-glibc-node.sh" -y >"$ROOT/01c.log" 2>&1 ||
+	{
+		cat "$ROOT/01c.log"
+		fail "[01c] exited non-zero"
+	}
+grep -q "Node spec: 24.19.0 (from $CFG)" "$ROOT/01c.log" ||
+	fail "[01c] 未从 config 读取 node_version (应打印 '(from $CFG)')"
+grep -q 'already present' "$ROOT/01c.log" ||
+	fail "[01c] 版本已满足却仍走了下载分支"
+ok "[01c] config 生效: 读 24.19.0 + 复用已装 node"
 
 echo "=== 2. [02] npm 装 dsh (--ignore-scripts; 冷装可能 20min+) ==="
 bash "$TI_ROOT/../scripts/02-install-dsh.sh" -y >"$ROOT/02.log" 2>&1 ||
@@ -187,19 +170,17 @@ NR="$(grep -c "export PATH=\"$ROOT/bin:\$PATH\"" "$ROOT/home/.bashrc")"
 [ "$NR" = "1" ] || fail "bashrc PATH 行出现 $NR 次 (应为 1 次, 重复追加)"
 ok "[04] wrapper/opener/symlink/profile 接线完成 ($WV)"
 
-echo "=== 4b. 00-setup 的 runtime 自含段 (Option B 与 Option A 布局归一) ==="
+echo "=== 4b. 00-setup 的 runtime 自含段 ==="
 # 00-setup.sh pipeline: 01→02→03→自含复制→04。r3 逐脚本驱动跳过了 00 的驱动
 # 逻辑; 这里等价执行其复制段 (与 00-setup.sh 的 Bundling 块同源同序), 并断言
-# 产物形态——Option B runtime 从此与 Option A release 布局一致, `dsh update`
-# 的 wrapper 解析 (runtime 内置优先) 不再依赖 repo checkout 存活。
+# 产物形态——runtime 自带 updater + 补丁集, `dsh update` 的 wrapper 解析
+# (runtime 内置优先) 不依赖 checkout 存活。
 {
 	mkdir -p "$ROOT/prefix/scripts"
 	cp "$TI_ROOT/../scripts/update-dsh.sh" "$TI_ROOT/../scripts/common.sh" \
 		"$TI_ROOT/../scripts/patch-lib.sh" "$ROOT/prefix/scripts/"
 	rm -rf "$ROOT/prefix/patches"
 	cp -r "$TI_ROOT/../patches" "$ROOT/prefix/patches"
-	# 仓库项目 VERSION 已派生化: 以基线 pin 的稳定 release 尾段为准
-	printf '%s\n' "${BASELINE_TAG##*-}" >"$ROOT/prefix/VERSION"
 } >"$ROOT/00b.log" 2>&1 || {
 	cat "$ROOT/00b.log"
 	fail "自含复制段失败"
@@ -207,13 +188,9 @@ echo "=== 4b. 00-setup 的 runtime 自含段 (Option B 与 Option A 布局归一
 [ -f "$ROOT/prefix/scripts/update-dsh.sh" ] || fail "runtime 缺 scripts/update-dsh.sh"
 [ -f "$ROOT/prefix/scripts/common.sh" ] || fail "runtime 缺 scripts/common.sh"
 [ -f "$ROOT/prefix/scripts/patch-lib.sh" ] || fail "runtime 缺 scripts/patch-lib.sh"
-[ -f "$ROOT/prefix/VERSION" ] || fail "runtime 缺 VERSION"
 NSHIP="$(shipped_patch_entries "$ROOT/prefix/scripts/patch-lib.sh" | wc -l)"
 [ "$NSHIP" -ge 1 ] || fail "runtime patches/ 未随 patch-lib 声明"
-VSHIP="$(tr -d '[:space:]' <"$ROOT/prefix/VERSION")"
-VREPO="${BASELINE_TAG##*-}"
-[ "$VSHIP" = "$VREPO" ] || fail "runtime VERSION($VSHIP) != 派生的项目 VERSION($VREPO)"
-ok "runtime 自含: scripts/ + patches/($NSHIP) + VERSION($VSHIP) 已入库 runtime"
+ok "runtime 自含: scripts/ + patches/($NSHIP) 已入库 runtime"
 
 echo "=== 5. 本地正在运行的 dsh runtime 未被触碰 ==="
 live_sentinel
