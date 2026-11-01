@@ -121,6 +121,23 @@ NPXVER="$("$ROOT/bin/npx" --version 2>"$ROOT/shim-npx-err.log")" \
   || { cat "$ROOT/shim-npx-err.log" >&2; fail "npx shim 无法运行"; }
 ok "npx shim 运行 ($NPXVER)"
 
+echo "=== 6d. pnpm (runtime 携带则强断言; 旧基线无则降级 WARN) ==="
+# `dsh plugin` 把参数转发给 PATH 上的 pnpm (dsh 0.2.1-rc.5 源码证实: execa
+# spawn "pnpm", 缺失即 exit 127)。新版 runtime 在 node root 里随包 pnpm 10
+# (纯 JS), write_node_shims 据此生成第四个 shim。基线 tarball 在含本改动
+# 的版本发布并 re-pin 之前不带 pnpm —— 那时只能降级 WARN, 发布后自动升级
+# 为下面的强断言 (r5 的「tarball 携带 VERSION 时加跑 --self」同款条件式)。
+PNPM_JS="$ROOT/prefix/node/lib/node_modules/pnpm/bin/pnpm.cjs"
+if [ -f "$PNPM_JS" ]; then
+  [ -x "$ROOT/bin/pnpm" ] || fail "runtime 携带 pnpm 但 pnpm shim 缺失"
+  grep -qF '# dsh-termux node shim' "$ROOT/bin/pnpm" || fail "pnpm shim 缺少生成标记"
+  PVER="$("$ROOT/bin/pnpm" --version 2>"$ROOT/shim-pnpm-err.log")" \
+    || { cat "$ROOT/shim-pnpm-err.log" >&2; fail "pnpm shim 无法运行"; }
+  ok "pnpm shim 运行 ($PVER)"
+else
+  warn_record "基线 tarball 未携带 pnpm; 'dsh plugin' 在该基线上仍会 127 (发布含 pnpm 的版本并 re-pin 后本断言自动变为强断言)"
+fi
+
 echo "=== 7. 本地正在运行的 dsh runtime 未被触碰 ==="
 live_sentinel
 

@@ -63,7 +63,7 @@ bash .test-install/tools/tb.sh --review "CI-only, no on-device surface"  # 无�
 
 |路线|命令|测什么|网络|备注|
 |---|---|---|---|---|
-|R1|`r1`|工作区 `build/install.sh` × 基线 tarball 全安装接线(每次迭代必跑);1b 覆盖重装回归(种入旧 npm 树残留→重装→断言清空+npm 模块链可加载);6c node/npm/npx shim 断言(齐备+生成标记+三个可直连运行)|无|~25s(两次解包);期望版本取自 baseline.env|
+|R1|`r1`|工作区 `build/install.sh` × 基线 tarball 全安装接线(每次迭代必跑);1b 覆盖重装回归(种入旧 npm 树残留→重装→断言清空+npm 模块链可加载);6c node/npm/npx shim 断言(齐备+生成标记+三个可直连运行);6d pnpm 断言(runtime 携带则 shim 齐备+标记+可运行,旧基线无则 WARN)|无|~25s(两次解包);期望版本取自 baseline.env|
 |R2|`r2`(`--pinned` 离线测 pin 资产)|**下载当前 latest release** 认证:shipped install.sh + tarball 完好|默认需要|认证对象=用户将拿到的最新产物;下载物进沙箱 dl/,不碰 release-test/;1.2.1 起条件断言 tarball 顶层 VERSION|
 |R3|`r3`|工作区 `00-setup` 流水线 01→02(npm)→03(补丁)→自含复制段→04|npm + nodejs.org|**冷装 20min+ 属正常**;前置预检真机 glibc 三件套|
 |R4|`r4`|种子旧 runtime → **工作区** `update-dsh.sh -t <tag> -y` 更新机制；第 8 步种入假旧 VERSION 强制走**自动刷新分支**（判定落后→下载补丁集资产→re-exec→继续 npm 并完成；marker 从已安装注册表派生）|npm registry + GitHub|`DSH_UPDATE_TAG=<tag>` 换目标;断言 wrapper 钩子指向 runtime 内置更新器|

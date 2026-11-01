@@ -24,6 +24,7 @@
 #   DSH_RUNTIME_DIR   where the runtime is built (default ./dsh-termux-runtime)
 #   DSH_NODE_VERSION  node version to fetch (default: NODE_VERSION file)
 #   DSH_DSH_VERSION   dsh npm spec to install (default @deepseek-ai/dsh@latest)
+#   DSH_PNPM_VERSION  pnpm npm spec to install (default pnpm@10; see block 2b)
 #   DSH_SOURCE_TREE   build FROM SOURCE instead of npm: path to an upstream
 #                     checkout that has already been built and packed (see
 #                     stage_from_source below). Ignored when unset, which is
@@ -39,6 +40,7 @@ RUNTIME_DIR="${DSH_RUNTIME_DIR:-$BASE_DIR/dsh-termux-runtime}"
 NODE_VERSION="${DSH_NODE_VERSION:-$(tr -d '[:space:]' < "$BASE_DIR/NODE_VERSION" 2>/dev/null || true)}"
 [ -n "$NODE_VERSION" ] || { echo "!! NODE_VERSION file missing/empty at $BASE_DIR/NODE_VERSION" >&2; exit 1; }
 DSH_VERSION="${DSH_DSH_VERSION:-@deepseek-ai/dsh@latest}"
+PNPM_SPEC="${DSH_PNPM_VERSION:-pnpm@10}"
 SOURCE_TREE="${DSH_SOURCE_TREE:-}"
 
 NODE_ROOT="$RUNTIME_DIR/node"
@@ -151,6 +153,26 @@ else
   "$NODE_BIN" "$NPM_CLI" install "$DSH_VERSION" --ignore-scripts
 fi
 
+# --- 2b. pnpm ----------------------------------------------------------------
+# `dsh plugin` forwards its arguments to pnpm, spawned off PATH (verified
+# against @deepseek-ai/dsh@0.2.1-rc.5: execa(options.command ?? "pnpm", ...);
+# missing pnpm exits 127 with "pnpm was not found"). The runtime therefore
+# ships pnpm inside its own Node root. Deliberately pinned to the pnpm 10
+# line: pure JS (bin/pnpm.cjs, no install scripts) — pnpm >= 11/12 move to a
+# platform native binary handed out by an install script, which would add a
+# second glibc executable to support on the device for no gain. Installed with
+# the bundled npm, so the tarball stays self-contained: no device-side
+# download at install time or on first `dsh plugin` use.
+echo "==> Installing pnpm ($PNPM_SPEC) into the runtime Node ..."
+"$NODE_BIN" "$NPM_CLI" install -g "$PNPM_SPEC"
+PNPM_JS="$NODE_ROOT/lib/node_modules/pnpm/bin/pnpm.cjs"
+if [ ! -f "$PNPM_JS" ]; then
+  echo "!! pnpm entry not found at $PNPM_JS — pnpm layout changed? Pin a" >&2
+  echo "   version whose layout still matches (DSH_PNPM_VERSION) and check" >&2
+  echo "   scripts/common.sh write_node_shims." >&2
+  exit 1
+fi
+
 # --- 3. Apply patches -------------------------------------------------------
 # Note: $WORK_DIR is usually *inside* a git checkout here (CI builds the runtime
 # under $GITHUB_WORKSPACE), which is exactly the case plain
@@ -181,6 +203,8 @@ build_native_addons "$WORK_DIR" "$NODE_BIN" "$NPM_CLI"
 echo "==> Boot smoke (CLI version)"
 DSH_BIN="$WORK_DIR/node_modules/@deepseek-ai/dsh/lib/bin.js"
 "$NODE_BIN" --expose-internals "$DSH_BIN" --version
+echo "==> Boot smoke (bundled pnpm)"
+"$NODE_BIN" "$PNPM_JS" --version
 
 echo "==> [build] Done. Runtime built at $RUNTIME_DIR"
 echo "    node : $NODE_ROOT"

@@ -16,9 +16,9 @@
 #      the Termux `$BROWSER` opener (`dsh-termux-open`),
 #   4. symlinks it to $DSH_BIN_DIR/dsh (default $HOME/.local/bin),
 #   5. prepends $DSH_BIN_DIR to PATH in ~/.bashrc (tagged # dsh-termux),
-#   6. registers node/npm/npx shims (glibc Node) in the same bin dir —
+#   6. registers node/npm/npx/pnpm shims (glibc Node) in the same bin dir —
 #      register_node_shims asks to uninstall a Termux pkg Node first
-#      (default: keep).
+#      (default: keep). pnpm joins when the runtime bundles it.
 #
 # Self-contained: needs nothing from the dsh-termux repo checkout beyond what
 # the tarball itself carries. One-liner:
@@ -54,7 +54,7 @@ Flags:
   -y, --yes            auto-accept every prompt (REQUIRED in pipe mode)
   -p, --package FILE   path to a local runtime tarball
   --prefix DIR         install prefix (default $HOME/.local/opt/dsh-termux-runtime)
-  --bin DIR           bin dir for the dsh symlink + node/npm/npx shims
+  --bin DIR           bin dir for the dsh symlink + node/npm/npx/pnpm shims
                       (default $HOME/.local/bin)
   -h, --help           show this help
 
@@ -254,18 +254,21 @@ else
   echo "    ~/.bashrc already tagged with $TAG; leaving it unchanged."
 fi
 
-# --- Register node/npm/npx shims (glibc Node) --------------------------------
+# --- Register node/npm/npx/pnpm shims (glibc Node) ----------------------------
 # register_node_shims (sourced from scripts/common.sh) asks to uninstall a
 # Termux pkg-owned Node first (default: keep — -y also keeps), then writes
-# node/npm/npx wrappers next to the dsh symlink. Same bin dir, same PATH line.
+# node/npm/npx (and pnpm, when bundled) wrappers next to the dsh symlink.
+# Same bin dir, same PATH line.
 register_node_shims "$BIN_DIR" "$PREFIX/node"
 
 echo
 echo "==> Install complete."
 echo "    Start a new shell (or 'source ~/.bashrc') so 'dsh' resolves."
-echo "    node/npm/npx now resolve to the glibc Node in the same shell."
+echo "    node/npm/npx (and pnpm, when bundled) now resolve to the glibc Node in the same shell."
 echo "    Test:   dsh --version"
 echo "            node --version && npm --version"
+echo "            pnpm --version   # required by 'dsh plugin'"
+echo "    Plugins: dsh plugin --profile <name> add <package>"
 echo "    Web UI: dsh web --port 3080"
 echo "    Update later (no repo clone needed):"
 echo "        dsh update -t next -y"

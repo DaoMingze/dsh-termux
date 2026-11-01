@@ -285,6 +285,14 @@ echo "     (仓库与本地正在运行的 dsh runtime 全程不受影响)"
 echo "  3b) 让 agent 在 bash 工具里执行 mktemp -d 和 echo x > \$TMPDIR/t && cat \$TMPDIR/t"
 echo "      (workspace-write 下应成功且落在 $ROOT/tmp —— 验证 Landlock tmpdir 补丁;"
 echo "       修复前这两条会被 [sandbox: file access denied] 拒绝)"
+if [ -f "$ROOT/prefix/node/lib/node_modules/pnpm/bin/pnpm.cjs" ]; then
+  echo "  3c) 插件链路 (dsh plugin 依赖 PATH 上的 pnpm, 见 build-runtime.sh 2b):"
+  echo "      $ROOT/bin/pnpm --version 应出版本号;"
+  echo "      $ROOT/bin/dsh plugin --profile pnpm-probe add nanoid"
+  echo "      应拉包成功且无 'pnpm was not found' (需网络; 失败时贴完整输出)"
+else
+  echo "  3c) 跳过: 沙箱 runtime 未携带 pnpm (旧基线), 插件链路本项标「未实测」"
+fi
 echo "  4) 浏览器交接: 第 1 条自动弹出的那次就是它 —— opener 由 dsh 进程调用,"
 echo "     不受 agent 文件沙箱约束; 浏览器弹出即本项通过"
 echo "     (别让 agent 在 bash 工具里跑 opener: workspace-write 下必定 SIGABRT/134,"

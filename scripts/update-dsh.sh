@@ -8,7 +8,7 @@
 #   3. re-applies the Android patch set (idempotent),
 #   4. rewrites the `dsh` wrapper + symlink (including the Termux $BROWSER
 #      handoff — see write_dsh_wrapper in common.sh) and refreshes the
-#      node/npm/npx shims (write_node_shims; no prompts on this path).
+#      node/npm/npx/pnpm shims (write_node_shims; no prompts on this path).
 #
 # The npm update path only moves the dsh version. The PATCH SET (and this
 # updater itself) evolves with project releases, not npm — so on every run the
@@ -680,12 +680,12 @@ mkdir -p "$BIN_DIR"
 ln -sf "$WRAPPER" "$BIN_DIR/dsh"
 echo "==> Wrapper updated: $BIN_DIR/dsh -> $WRAPPER"
 
-# --- Refresh node/npm/npx shims ----------------------------------------------
+# --- Refresh node/npm/npx/pnpm shims -----------------------------------------
 # Write-only on purpose: the Termux pkg conflict was an install-time decision
 # (register_node_shims), and the --self branch intentionally skips this to
 # keep its "machinery + patches only" contract. Non-fatal: dsh itself is done.
 if ! write_node_shims "$BIN_DIR" "$RUNTIME_DIR/node"; then
-  echo "!! node/npm/npx shims not refreshed (see message above); dsh is unaffected." >&2
+  echo "!! node/npm/npx/pnpm shims not refreshed (see message above); dsh is unaffected." >&2
 fi
 
 NEW_VERSION="$(run_glibc_node "$NODE_BIN" --expose-internals "$DSH_BIN" --version 2>/dev/null | tr -d '\r')"

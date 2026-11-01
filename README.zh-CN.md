@@ -54,6 +54,7 @@ bash scripts/00-setup.sh        # 加 -y 自动接受所有提示
 
 ```sh
 dsh --version    # 打印已安装版本(跟随 npm,所以会变化)
+pnpm --version   # 随运行时内置;`dsh plugin` 依赖它
 dsh web --port 3080
 ```
 
@@ -102,6 +103,8 @@ rm -rf ~/.dsh    # dsh 的数据(配置/会话);确认不需要再删——删�
 **更新时报 "Patch does not apply / version drift"?** 说明 npm 上新发布的 dsh 改动了补丁目标文件。这是预期内的保护机制——此时 dsh 保持已安装但未打补丁,Android 上会话保存/write 工具可能报 `EACCES`。请到 [Issues](https://github.com/ErEbusE/dsh-termux/issues) 提报,或按 [PATCHES.md](PATCHES.md) 重新生成补丁。
 
 **装了很久没更新,`dsh update` 不识别?** 1.1.0 之前的 runtime 没有包装脚本快捷方式:直接运行内置更新器——`bash ~/.local/opt/dsh-termux-runtime/scripts/update-dsh.sh -t next -y`。升到 1.1.0+ 后 `dsh update` 快捷方式会随每次更新自我保持;1.2.1 之前的 runtime 还没有补丁集自动刷新(更新会带着旧补丁集继续,并有提示),用方案A 重装一次即可全部补齐。
+
+**`dsh plugin` 报 "pnpm was not found"?** `dsh plugin` 会把参数转发给 pnpm(从 `PATH` 上拉起)。内置 pnpm 之前的 runtime 没有它——更新(`dsh update -y`)或重装即可获得:运行时在自己的 Node 里随包 pnpm(纯 JS 的 pnpm 10 线,设备端零下载),并在 `dsh` 旁边注册 `pnpm` 命令 shim。
 
 **我的数据在哪里?** dsh 自身的数据在 `~/.dsh/`(上游默认);本项目的运行时在 `~/.local/opt/dsh-termux-runtime/`。
 

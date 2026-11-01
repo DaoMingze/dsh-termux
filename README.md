@@ -55,6 +55,7 @@ Option B resolves dsh from npm at install time (whatever is published right then
 
 ```sh
 dsh --version    # prints the installed version (tracks npm, so it changes)
+pnpm --version   # bundled in the runtime; required by `dsh plugin`
 dsh web --port 3080
 ```
 
@@ -103,6 +104,8 @@ The line tagged `# dsh-termux` in `~/.bashrc` must be deleted manually.
 **Update stopped with "Patch does not apply / version drift"?** A newly published dsh changed the patched files. This is the intended safety stop — dsh stays installed but unpatched, so session saves and the write tool may fail with `EACCES` on Android. File an [issue](https://github.com/ErEbusE/dsh-termux/issues) or regenerate the patches per [PATCHES.md](PATCHES.md).
 
 **`dsh update` unknown on a long-overdue install?** Runtimes from releases before 1.1.0 have no wrapper shortcut: run the bundled updater directly — `bash ~/.local/opt/dsh-termux-runtime/scripts/update-dsh.sh -t next -y`. From 1.1.0+ the `dsh update` shortcut keeps itself current; runtimes from before 1.2.1 also lack the automatic patch-set refresh (updates proceed on the old set, with a notice), and a fresh Option A install brings them fully current.
+
+**`dsh plugin` says "pnpm was not found"?** `dsh plugin` forwards its arguments to pnpm (spawned off `PATH`). Runtimes from releases before pnpm bundling shipped no pnpm — update (`dsh update -y`) or reinstall to get it: the runtime carries pnpm inside its own Node (the pure-JS pnpm 10 line, no device-side download) and registers a `pnpm` command shim next to `dsh`.
 
 **Where is my data?** dsh data lives in `~/.dsh/` (upstream default); this project's runtime in `~/.local/opt/dsh-termux-runtime/`.
 

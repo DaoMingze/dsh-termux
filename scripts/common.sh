@@ -430,19 +430,24 @@ DSH_SHIM
 }
 
 # write_node_shims <bin_dir> <node_root>
-# Register the glibc Node as plain `node` / `npm` / `npx` commands: three
-# wrapper scripts in <bin_dir> — the same dir as the `dsh` symlink, which the
+# Register the glibc Node as plain `node` / `npm` / `npx` commands: wrapper
+# scripts in <bin_dir> — the same dir as the `dsh` symlink, which the
 # install prepends to PATH. Wrappers, not symlinks, because the point is the
 # environment (unset LD_PRELOAD + glibc bin dir first): exactly what the `dsh`
 # wrapper does for dsh itself. npm/npx exec the tarball's npm/npx-cli.js
 # through the real node binary, so process.execPath stays node — the same
 # direct-exec discipline configure_glibc_node established.
+# `pnpm` joins them when the runtime bundles it (build-runtime.sh block 2b):
+# `dsh plugin` spawns pnpm off PATH (exit 127 otherwise), and the shim's
+# exec line runs the bundled pnpm.cjs through the real node binary — no
+# device-side download. Older runtimes without pnpm degrade to a warning.
 # Idempotent; see register_node_shims for the install-time conflict prompt.
 write_node_shims() {
   local bin_dir="$1" node_root="$2"
   local node_bin="$node_root/bin/node"
   local npm_cli="$node_root/lib/node_modules/npm/bin/npm-cli.js"
   local npx_cli="$node_root/lib/node_modules/npm/bin/npx-cli.js"
+  local pnpm_js="$node_root/lib/node_modules/pnpm/bin/pnpm.cjs"
   if [ ! -x "$node_bin" ]; then
     echo "!! write_node_shims: '$node_bin' missing or not executable" >&2
     return 1
@@ -458,6 +463,12 @@ write_node_shims() {
     _emit_node_shim "$bin_dir/npx" "exec \"$node_bin\" \"$npx_cli\" \"\$@\""
   else
     echo "    npx-cli.js not found; npx shim skipped (npm exec still works)." >&2
+  fi
+  if [ -f "$pnpm_js" ]; then
+    _emit_node_shim "$bin_dir/pnpm" "exec \"$node_bin\" \"$pnpm_js\" \"\$@\""
+  else
+    echo "    pnpm not bundled in this runtime; pnpm shim skipped." >&2
+    echo "    NOTE: 'dsh plugin' needs pnpm on PATH — upgrade the runtime to get it." >&2
   fi
 }
 
@@ -501,7 +512,7 @@ register_node_shims() {
       echo "    every shell that sources ~/.bashrc (the dsh-termux PATH line)."
     fi
   fi
-  echo "==> Registering node/npm/npx shims (glibc Node) into $bin_dir"
+  echo "==> Registering node/npm/npx/pnpm shims (as bundled) into $bin_dir"
   write_node_shims "$bin_dir" "$node_root"
 }
 
