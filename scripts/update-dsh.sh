@@ -7,7 +7,8 @@
 #   2. installs the chosen version under the glibc Node (npm install <tag>),
 #   3. re-applies the Android patch set (idempotent),
 #   4. rewrites the `dsh` wrapper + symlink (including the Termux $BROWSER
-#      handoff — see write_dsh_wrapper in common.sh).
+#      handoff — see write_dsh_wrapper in common.sh) and refreshes the
+#      node/npm/npx shims (write_node_shims; no prompts on this path).
 #
 # The npm update path only moves the dsh version. The PATCH SET (and this
 # updater itself) evolves with project releases, not npm — so on every run the
@@ -259,8 +260,10 @@ fetch_release_patch_set() {
   local tag="$1" dest="$2" work="$3"
   local pkg="$work/dsh-termux-patches.tar.gz"
   mkdir -p "$dest"
-  if curl -fsSL --retry 2 --retry-delay 2 -o "$pkg" \
-      "https://github.com/$REPO/releases/latest/download/dsh-termux-patches.tar.gz" 2>/dev/null \
+  # The probe is an EXPECTED miss on releases that ship no patch-set asset,
+  # so --quiet keeps dsh_fetch's failure chatter out of the fallback narration.
+  if dsh_fetch --gzip --quiet \
+      "https://github.com/$REPO/releases/latest/download/dsh-termux-patches.tar.gz" "$pkg" \
       && tar -xzf "$pkg" -C "$dest" scripts patches VERSION 2>/dev/null; then
     echo "==> [self] fetching patch-set asset for $tag (~40KB)"
     return 0
@@ -269,8 +272,8 @@ fetch_release_patch_set() {
   echo "    falling back to the full runtime tarball (~100MB) — consider"
   echo "    upgrading to a newer release for the lightweight channel."
   pkg="$work/dsh-termux-runtime.tar.gz"
-  if ! curl -fL --retry 3 --retry-delay 2 -o "$pkg" \
-      "https://github.com/$REPO/releases/latest/download/dsh-termux-runtime.tar.gz"; then
+  if ! dsh_fetch --gzip \
+      "https://github.com/$REPO/releases/latest/download/dsh-termux-runtime.tar.gz" "$pkg"; then
     echo "!! --self: download failed. Network, or fetch the tarball manually:" >&2
     echo "   https://github.com/$REPO/releases/latest/download/dsh-termux-runtime.tar.gz" >&2
     return 1
@@ -676,6 +679,14 @@ write_dsh_wrapper "$WRAPPER" "$NODE_BIN" "$DSH_BIN" "$UPDATER"
 mkdir -p "$BIN_DIR"
 ln -sf "$WRAPPER" "$BIN_DIR/dsh"
 echo "==> Wrapper updated: $BIN_DIR/dsh -> $WRAPPER"
+
+# --- Refresh node/npm/npx shims ----------------------------------------------
+# Write-only on purpose: the Termux pkg conflict was an install-time decision
+# (register_node_shims), and the --self branch intentionally skips this to
+# keep its "machinery + patches only" contract. Non-fatal: dsh itself is done.
+if ! write_node_shims "$BIN_DIR" "$RUNTIME_DIR/node"; then
+  echo "!! node/npm/npx shims not refreshed (see message above); dsh is unaffected." >&2
+fi
 
 NEW_VERSION="$(run_glibc_node "$NODE_BIN" --expose-internals "$DSH_BIN" --version 2>/dev/null | tr -d '\r')"
 echo "==> Updated to: $NEW_VERSION"

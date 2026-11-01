@@ -8,7 +8,9 @@
 #     write_dsh_wrapper and write_dsh_opener in common.sh,
 #   - symlinks it into a bin dir (default $HOME/.local/bin, interactive),
 #   - prepends that bin dir to PATH in ~/.bashrc (tagged # dsh-termux) so the
-#     wrapper behaves exactly like the original `dsh` command.
+#     wrapper behaves exactly like the original `dsh` command,
+#   - registers node/npm/npx shims (glibc Node) in the same bin dir
+#     (register_node_shims in common.sh; asks about a Termux pkg Node first).
 set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -73,8 +75,12 @@ else
   echo "    ~/.bashrc already tagged with $TAG; leaving it unchanged."
 fi
 
+# --- Register node/npm/npx shims (glibc Node) -------------------------------
+register_node_shims "$BIN_DIR" "$RUNTIME_DIR/node"
+
 echo "    NOTE: start a new shell (or 'source ~/.bashrc') so 'dsh' resolves."
 echo "    You can now run:  dsh --version   /   dsh web   /   dsh --profile headless ..."
+echo "    Plain commands node / npm / npx also resolve to the glibc Node now."
 
 # --- Launch web -------------------------------------------------------------
 # Launch through the wrapper so this run gets exactly what the `dsh` command

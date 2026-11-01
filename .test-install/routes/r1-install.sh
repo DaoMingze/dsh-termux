@@ -48,7 +48,7 @@ bash build/install.sh -y \
 ok "覆盖重装: 残留清空 + 非 tarball 文件保留 + npm cacache 链可加载"
 
 echo "=== 2. install.sh 不携带复制逻辑 (委托 common.sh) ==="
-for pat in 'configure_glibc_node()' 'write_dsh_wrapper()' 'write_dsh_opener()' 'DSH_OPENER=' 'DSH_WRAPPER_HEAD=' 'ask_yes_no()'; do
+for pat in 'configure_glibc_node()' 'write_dsh_wrapper()' 'write_dsh_opener()' 'DSH_OPENER=' 'DSH_WRAPPER_HEAD=' 'ask_yes_no()' 'write_node_shims()' '_emit_node_shim()' 'register_node_shims()' 'DSH_SHIM='; do
   if grep -qF -- "$pat" build/install.sh; then fail "install.sh still contains $pat"; fi
 done
 if grep -q -- '--set-interpreter' build/install.sh; then
@@ -101,6 +101,25 @@ echo "=== 6b. 工作区补丁集 overlay (serve.sh 起 web 前的同一动作、
 overlay_workspace_patches "$ROOT/prefix/work" \
   || fail "工作区补丁集打不进基线种子树 (serve.sh 也会拒绝启动)"
 ok "工作区补丁集可 overlay 到本树 (含 marker 验证)"
+
+echo "=== 6c. node/npm/npx shims (glibc Node 直连短命令) ==="
+# install.sh 收尾时经 register_node_shims -> write_node_shims 把三个 shim
+# 写进 --bin 目录。断言: 齐备、带生成标记、三个都能直连运行 (npm/npx 走
+# node <npm-cli.js>, 等于顺带验证了 tarball 内 npm 的模块链可加载)。
+for s in node npm npx; do
+  [ -x "$ROOT/bin/$s" ] || fail "shim $s missing"
+  grep -qF '# dsh-termux node shim' "$ROOT/bin/$s" || fail "shim $s 缺少生成标记"
+done
+ok "node/npm/npx shim 齐备且带标记"
+SVER="$("$ROOT/bin/node" --version 2>"$ROOT/shim-node-err.log")" \
+  || { cat "$ROOT/shim-node-err.log" >&2; fail "node shim 无法直连运行"; }
+ok "node shim 直连运行 ($SVER)"
+NPMVER="$("$ROOT/bin/npm" --version 2>"$ROOT/shim-npm-err.log")" \
+  || { cat "$ROOT/shim-npm-err.log" >&2; fail "npm shim 无法运行"; }
+ok "npm shim 运行 ($NPMVER)"
+NPXVER="$("$ROOT/bin/npx" --version 2>"$ROOT/shim-npx-err.log")" \
+  || { cat "$ROOT/shim-npx-err.log" >&2; fail "npx shim 无法运行"; }
+ok "npx shim 运行 ($NPXVER)"
 
 echo "=== 7. 本地正在运行的 dsh runtime 未被触碰 ==="
 live_sentinel

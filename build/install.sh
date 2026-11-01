@@ -15,7 +15,10 @@
 #      interpreter at Termux's glibc loader and emit the `dsh` wrapper plus
 #      the Termux `$BROWSER` opener (`dsh-termux-open`),
 #   4. symlinks it to $DSH_BIN_DIR/dsh (default $HOME/.local/bin),
-#   5. prepends $DSH_BIN_DIR to PATH in ~/.bashrc (tagged # dsh-termux).
+#   5. prepends $DSH_BIN_DIR to PATH in ~/.bashrc (tagged # dsh-termux),
+#   6. registers node/npm/npx shims (glibc Node) in the same bin dir —
+#      register_node_shims asks to uninstall a Termux pkg Node first
+#      (default: keep).
 #
 # Self-contained: needs nothing from the dsh-termux repo checkout beyond what
 # the tarball itself carries. One-liner:
@@ -51,7 +54,8 @@ Flags:
   -y, --yes            auto-accept every prompt (REQUIRED in pipe mode)
   -p, --package FILE   path to a local runtime tarball
   --prefix DIR         install prefix (default $HOME/.local/opt/dsh-termux-runtime)
-  --bin DIR            bin dir for the dsh symlink (default $HOME/.local/bin)
+  --bin DIR           bin dir for the dsh symlink + node/npm/npx shims
+                      (default $HOME/.local/bin)
   -h, --help           show this help
 
 The tarball bundles node/, the patched dsh tree, and the updater
@@ -111,9 +115,17 @@ if [ -z "$PKG" ]; then
   DL_DIR="${TMPDIR:-$HOME/.cache/dsh-termux}"
   mkdir -p "$DL_DIR"
   DOWNLOADED="$(mktemp "$DL_DIR/runtime.XXXXXXXX.tar.gz")"
-  if ! curl -fL --retry 3 --retry-delay 2 -o "$DOWNLOADED" "$URL"; then
-    echo "!! Download failed. Check the network, or download $ASSET from" >&2
-    echo "   https://github.com/$REPO/releases manually and pass it with -p." >&2
+  # Bootstrap copy of dsh_fetch's integrity discipline: scripts/common.sh
+  # (where dsh_fetch lives) travels INSIDE the tarball being downloaded here,
+  # so it cannot be sourced yet — chicken-and-egg. The mktemp name is already
+  # unique, so no pre-existing file needs the .part atomic-replace protection;
+  # the real gap is verification: prove the download is intact gzip BEFORE
+  # trusting it, so corruption fails here instead of as a mystery tar error.
+  if ! curl -fL --retry 3 --retry-delay 2 -o "$DOWNLOADED" "$URL" \
+      || ! gzip -t "$DOWNLOADED" 2>/dev/null; then
+    echo "!! Download failed or the tarball is corrupt. Check the network, or" >&2
+    echo "   download $ASSET from https://github.com/$REPO/releases manually" >&2
+    echo "   and pass it with -p." >&2
     exit 1
   fi
   PKG="$DOWNLOADED"
@@ -242,10 +254,18 @@ else
   echo "    ~/.bashrc already tagged with $TAG; leaving it unchanged."
 fi
 
+# --- Register node/npm/npx shims (glibc Node) --------------------------------
+# register_node_shims (sourced from scripts/common.sh) asks to uninstall a
+# Termux pkg-owned Node first (default: keep — -y also keeps), then writes
+# node/npm/npx wrappers next to the dsh symlink. Same bin dir, same PATH line.
+register_node_shims "$BIN_DIR" "$PREFIX/node"
+
 echo
 echo "==> Install complete."
 echo "    Start a new shell (or 'source ~/.bashrc') so 'dsh' resolves."
+echo "    node/npm/npx now resolve to the glibc Node in the same shell."
 echo "    Test:   dsh --version"
+echo "            node --version && npm --version"
 echo "    Web UI: dsh web --port 3080"
 echo "    Update later (no repo clone needed):"
 echo "        dsh update -t next -y"
