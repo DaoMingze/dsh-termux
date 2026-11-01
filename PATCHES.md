@@ -1,34 +1,26 @@
 # Fixes & adaptations for dsh on Termux
 
-This project runs upstream `dsh` inside Termux — from npm on the stable
-channel; the manual pre-release workflow builds the same upstream tag from
-source, and both paths apply the patch set below. Everything below is an intentional deviation that makes dsh work on
-Android; it comes in two kinds:
+This project runs upstream `dsh` inside Termux — from npm on the stable channel; the manual pre-release workflow builds the same upstream tag from source, and both paths apply the patch set below. Everything below is an intentional deviation that makes dsh work on Android; it comes in two kinds:
 
-| Kind | What it means | Emitted by |
+|Kind|What it means|Emitted by|
 |---|---|---|
-| **Patch** | edits the compiled npm `lib/*.js` files inside `node_modules` | `scripts/03-apply-patches.sh`, `scripts/update-dsh.sh`, `build/build-runtime.sh` |
-| **Environment fix** | no dsh code change — the launcher/installer changes the runtime or environment instead | `configure_glibc_node`, `write_dsh_wrapper`, `write_dsh_opener` in `scripts/common.sh` (sourced by `build/install.sh` from the tarball) |
+|**Patch**|edits the compiled npm `lib/*.js` files inside `node_modules`|`scripts/03-apply-patches.sh`, `scripts/update-dsh.sh`, `build/build-runtime.sh`|
+|**Environment fix**|no dsh code change — the launcher/installer changes the runtime or environment instead|`configure_glibc_node`, `write_dsh_wrapper`, `write_dsh_opener` in `scripts/common.sh` (sourced by `build/install.sh` from the tarball)|
 
-Both families are guarded by CI: the environment fixes and the patch registry
-statically on every pull request (`verify.yml`), the patches themselves against
-a real npm install whenever their inputs change, on the release-bound pull
-request, and on demand (`patch-check.yml`; it has no cron — see AGENTS.md §4).
-The READMEs carry no fixes table — they only point here; this file is the
-single fix index (details in the section each row links to).
+Both families are guarded by CI: the environment fixes and the patch registry statically on every pull request (`verify.yml`), the patches themselves against a real npm install whenever their inputs change, on the release-bound pull request, and on demand (`patch-check.yml`; it has no cron — see AGENTS.md §4). The READMEs carry no fixes table — they only point here; this file is the single fix index (details in the section each row links to).
 
 ## Fix index
 
-| # | Fixes / adapts | One line | Detail |
+|#|Fixes / adapts|One line|Detail|
 |---|---|---|---|
-| 1 | session saves & write tool fail `EACCES: link` | SELinux forbids hard links in app-private storage; fall back to `rename()` | [Patch 1](#patch-1-hard-link-eacces) |
-| 2 | `dsh web` handoff dies; arguments get word-split | `process.execPath` was the glibc loader; launcher now execs node directly | [Fix 2](#fix-2-direct-exec) |
-| 3 | `dsh web` finds no browser on Android | `$BROWSER` points at an Android-intent opener | [Fix 3](#fix-3-browser-handoff) |
-| 4 | updating needs a repo checkout or a long script path | the wrapper adds a `dsh update` shortcut to the bundled updater | [Fix 4](#fix-4-update-shortcut) |
-| 5 | sandboxed bash cannot write `$TMPDIR` (workspace-write) | the Landlock dialect omits `os.tmpdir()` from its grants; the patch adds it | [Patch 5](#patch-5-landlock-tmpdir) |
-| 6 | the auto-opened `dsh web` tab answers "authentication required" (dsh >= 0.1.2) | an Android intent navigation is cross-site, so the `SameSite=Strict` session cookie never comes back; the patch makes it `Lax` | [Patch 6](#patch-6-browser-session-cookie-samesite) |
-| 7 | image attachments never persist on device — paste, paperclip and `read_image` all fail | `dsh-attachment-local` fsyncs its ancestors up to `/` and publishes objects with `link()`; Android denies both; skip unreadable ancestors, fall back to `rename()`/copy per upstream code generation | [Patch 7](#patch-7-attachment-local-android-durability) |
-| 8 | old sessions (saved before 0.1.3) open read-only in 0.1.3+: sending fails, `/` `+` `@` never populate | the format migration publishes `session.v3.jsonl.zstd` with `link()` — a second, unpatched call site in the same lib as patch 1; Android denies it, so every write open (and with it the session's agent) dies | [Patch 8](#patch-8-session-generation-publish-link) |
+|1|session saves & write tool fail `EACCES: link`|SELinux forbids hard links in app-private storage; fall back to `rename()`|[Patch 1](#patch-1-hard-link-eacces)|
+|2|`dsh web` handoff dies; arguments get word-split|`process.execPath` was the glibc loader; launcher now execs node directly|[Fix 2](#fix-2-direct-exec)|
+|3|`dsh web` finds no browser on Android|`$BROWSER` points at an Android-intent opener|[Fix 3](#fix-3-browser-handoff)|
+|4|updating needs a repo checkout or a long script path|the wrapper adds a `dsh update` shortcut to the bundled updater|[Fix 4](#fix-4-update-shortcut)|
+|5|sandboxed bash cannot write `$TMPDIR` (workspace-write)|the Landlock dialect omits `os.tmpdir()` from its grants; the patch adds it|[Patch 5](#patch-5-landlock-tmpdir)|
+|6|the auto-opened `dsh web` tab answers "authentication required" (dsh >= 0.1.2)|an Android intent navigation is cross-site, so the `SameSite=Strict` session cookie never comes back; the patch makes it `Lax`|[Patch 6](#patch-6-browser-session-cookie-samesite)|
+|7|image attachments never persist on device — paste, paperclip and `read_image` all fail|`dsh-attachment-local` fsyncs its ancestors up to `/` and publishes objects with `link()`; Android denies both; skip unreadable ancestors, fall back to `rename()`/copy per upstream code generation|[Patch 7](#patch-7-attachment-local-android-durability)|
+|8|old sessions (saved before 0.1.3) open read-only in 0.1.3+: sending fails, `/` `+` `@` never populate|the format migration publishes `session.v3.jsonl.zstd` with `link()` — a second, unpatched call site in the same lib as patch 1; Android denies it, so every write open (and with it the session's agent) dies|[Patch 8](#patch-8-session-generation-publish-link)|
 
 ---
 
@@ -36,127 +28,73 @@ single fix index (details in the section each row links to).
 
 ### Adding a patch: the one registry
 
-`DSH_PATCH_SET` in `scripts/patch-lib.sh` is the **single registry** — one
-entry `<patch file>:<rel target>:<marker>[:<precondition>]` drives every
-consumer, so adding a patch needs no edit anywhere else in the machinery.
-Entries key by **patch file**, and one target lib may carry several of them:
-[Patch 7](#patch-7-attachment-local-android-durability) ships a mandatory walk
-fix plus one conditional link fix per upstream code generation against the
-same `lib/index.js`. (Before the re-key, accessors resolved rel → first entry,
-which silently swallowed a second entry's marker and precondition.) Every
-consumer above reads whole entries:
+`DSH_PATCH_SET` in `scripts/patch-lib.sh` is the **single registry** — one entry `<patch file>:<rel target>:<marker>[:<precondition>]` drives every consumer, so adding a patch needs no edit anywhere else in the machinery. Entries key by **patch file**, and one target lib may carry several of them: [Patch 7](#patch-7-attachment-local-android-durability) ships a mandatory walk fix plus one conditional link fix per upstream code generation against the same `lib/index.js`. (Before the re-key, accessors resolved rel → first entry, which silently swallowed a second entry's marker and precondition.) Every consumer above reads whole entries:
 
-| Consumer | How it picks the set up |
+|Consumer|How it picks the set up|
 |---|---|
-| `scripts/03-apply-patches.sh` (setup pipeline) | `dsh_apply_patch_set` iterates the registry |
-| `scripts/update-dsh.sh` (updater) | same call — re-applies and verifies on update |
-| `build/build-runtime.sh` (release build) | same call — patches the shipped tree |
-| `build/install.sh` | applies nothing (the tarball ships pre-patched); unaffected |
-| CI `patch-check.yml` | apply step calls `dsh_apply_patch_set`; the marker check and the regression-guard probe derive their targets from the registry |
-| CI `verify.yml` | static integrity check on every PR: each entry must resolve to a patch file that targets that rel path and adds that marker, and no patch file may go unregistered |
-| CI `release.yml` | tarball copies the whole `patches/` dir; the structure check derives its patch-file AND target-lib list from the registry |
-| sandbox routes + `serve.sh` | derive expected patches/markers from the workspace registry (R3, R4, serve — R1 tests install wiring only, the tarball ships pre-patched) or the shipped one inside the artifact under test (R2, R5 — old and new formats both parse) |
+|`scripts/03-apply-patches.sh` (setup pipeline)|`dsh_apply_patch_set` iterates the registry|
+|`scripts/update-dsh.sh` (updater)|same call — re-applies and verifies on update|
+|`build/build-runtime.sh` (release build)|same call — patches the shipped tree|
+|`build/install.sh`|applies nothing (the tarball ships pre-patched); unaffected|
+|CI `patch-check.yml`|apply step calls `dsh_apply_patch_set`; the marker check and the regression-guard probe derive their targets from the registry|
+|CI `verify.yml`|static integrity check on every PR: each entry must resolve to a patch file that targets that rel path and adds that marker, and no patch file may go unregistered|
+|CI `release.yml`|tarball copies the whole `patches/` dir; the structure check derives its patch-file AND target-lib list from the registry|
+|sandbox routes + `serve.sh`|derive expected patches/markers from the workspace registry (R3, R4, serve — R1 tests install wiring only, the tarball ships pre-patched) or the shipped one inside the artifact under test (R2, R5 — old and new formats both parse)|
 
-The optional 4th field makes an entry **conditional**: the patch is applied,
-and its marker required, only while `<precondition>` is present in the target
-file. It exists for a fix whose upstream code is not in every dsh version —
-[Patch 6](#patch-6-browser-session-cookie-samesite) is the first one — and the
-precondition must be a string the patch itself does not remove, so
-applicability cannot flip after the first run (`verify.yml` enforces that).
-Three-field entries stay mandatory: they must apply, and a failure stops the
-pipeline. Every consumer above honours the distinction, so a conditional entry
-reports `-- skipped` / `-- n/a` on an older dsh instead of failing it.
+The optional 4th field makes an entry **conditional**: the patch is applied, and its marker required, only while `<precondition>` is present in the target file. It exists for a fix whose upstream code is not in every dsh version — [Patch 6](#patch-6-browser-session-cookie-samesite) is the first one — and the precondition must be a string the patch itself does not remove, so applicability cannot flip after the first run (`verify.yml` enforces that). Three-field entries stay mandatory: they must apply, and a failure stops the pipeline. Every consumer above honours the distinction, so a conditional entry reports `-- skipped` / `-- n/a` on an older dsh instead of failing it.
 
-The manual remainder is documentation and release bookkeeping: a section in
-this file plus its Fix-index row, and a `VERSION` bump so a release ships
-it (the READMEs carry no fixes table). Everything executable reads the registry.
+The manual remainder is documentation and release bookkeeping: a section in this file plus its Fix-index row, and a `VERSION` bump so a release ships it (the READMEs carry no fixes table). Everything executable reads the registry.
+
+### Re-verified against dsh 0.2.x (2026-11-01)
+
+The whole set was re-proven against the then-current npm builds — `latest` = **0.2.1-rc.5** and `alpha` = **0.2.2-alpha.2** — by assembling the five target packages (`0.2.1-rc.5` publishes them all in lockstep; a 284-package dependency closure confirms every one is installed) into pristine trees and running the production `dsh_apply_patch_set`: eight entries apply with all markers present and idempotent replay green on BOTH trees; the 0.1.2-shape attachment entry skips as designed. Two patches needed new bytes:
+
+- **Patch 6** — `sessionCookie` gained a `secure` parameter and builds its attributes in a `const`; the patch now edits that line (same `Strict` → `Lax` flip, same marker).
+- **Patch 5** — `landlockProfileArgs`'s mode grant line was reshaped in alpha (`readWrite.push("/tmp", ...workspaceWritableRoots(policy))`), so editing it in place can no longer serve every generation. The patch now INSERTS a shape-agnostic `if (workspace-write) readWrite.push(tmpdir())` line before the `return grantArgs({` block — byte-identical in 0.1.x, 0.2.1-rc.5 and 0.2.2-alpha.2 and unique in each file — and stays a mandatory 3-field entry. See [Patch 5](#patch-5-landlock-tmpdir).
+
+**The CRLF trap.** On Windows with `core.autocrlf=true`, a checkout turns every `.patch` file CRLF; a CRLF patch against LF npm files fails with an indistinguishable "version drift" (all nine patches "failed" this way once, on a machine-local copy — CI and Termux, which check out LF, were never affected). `.gitattributes` pins `* text=auto eol=lf`; keep patch bytes LF.
 
 ### Patch 1: hard-link EACCES
 
-Both patches share one root cause: **Android's kernel SELinux forbids hard
-links in app-private storage**. The dsh session store and the write tool both
-publish files with `link()` + `unlink()`; on Android that fails with
-`EACCES`. The patches make them fall back to `rename()` when the platform
-denies linking.
+Both patches share one root cause: **Android's kernel SELinux forbids hard links in app-private storage**. The dsh session store and the write tool both publish files with `link()` + `unlink()`; on Android that fails with `EACCES`. The patches make them fall back to `rename()` when the platform denies linking.
 
-They apply to the **compiled `lib` files inside `node_modules`** (npm
-packages ship built JS), not to the TypeScript source.
+They apply to the **compiled `lib` files inside `node_modules`** (npm packages ship built JS), not to the TypeScript source.
 
-| Patch | Target (in `node_modules/@deepseek-ai/...`) | Problem | Fix |
+|Patch|Target (in `node_modules/@deepseek-ai/...`)|Problem|Fix|
 |---|---|---|---|
-| `npm-dsh-session-persistence-jsonl-link-rename.patch` | `dsh-session-persistence-jsonl/lib/index.js` | session save fails `EACCES: link` | fall back to `rename()` on EACCES/EPERM/ENOTSUP/EOPNOTSUPP |
-| `npm-dsh-fs-local-link-rename.patch` | `dsh-fs-local/lib/index.js` | write tool fails `EACCES` (`createIfAbsent` publishes via `link()`) | fall back to `rename()` on platform link denials |
+|`npm-dsh-session-persistence-jsonl-link-rename.patch`|`dsh-session-persistence-jsonl/lib/index.js`|session save fails `EACCES: link`|fall back to `rename()` on EACCES/EPERM/ENOTSUP/EOPNOTSUPP|
+|`npm-dsh-fs-local-link-rename.patch`|`dsh-fs-local/lib/index.js`|write tool fails `EACCES` (`createIfAbsent` publishes via `link()`)|fall back to `rename()` on platform link denials|
 
-0.1.3's released-format migration later added a **second** `link()` call site
-in this same lib — it publishes the migrated `session.v3` generation — which
-this patch does not cover. That site has its own conditional patch:
+0.1.3's released-format migration later added a **second** `link()` call site in this same lib — it publishes the migrated `session.v3` generation — which this patch does not cover. That site has its own conditional patch:
 [Patch 8](#patch-8-session-generation-publish-link).
 
 #### Upstream anchors
 
-A patch's context lines belong to upstream's **build output**, not to its
-source — so anything that moves those lines moves the patch. What has actually
-changed, hashed from the npm tarballs:
+A patch's context lines belong to upstream's **build output**, not to its source — so anything that moves those lines moves the patch. What has actually changed, hashed from the npm tarballs:
 
-| dsh versions | `dsh-session-persistence-jsonl/lib/index.js` | `dsh-fs-local/lib/index.js` |
+|dsh versions|`dsh-session-persistence-jsonl/lib/index.js`|`dsh-fs-local/lib/index.js`|
 |---|---|---|
-| `0.1.0-rc.7` → `0.1.1-rc.2` | one identical build | one identical build |
-| `0.1.2-alpha.4` → `0.1.2-rc.1` | identical again (git blob `f3ec1b6`) | identical |
-| `0.1.3-alpha.2` | **new header, 3363 lines instead of 1529** | unchanged |
+|`0.1.0-rc.7` → `0.1.1-rc.2`|one identical build|one identical build|
+|`0.1.2-alpha.4` → `0.1.2-rc.1`|identical again (git blob `f3ec1b6`)|identical|
+|`0.1.3-alpha.2`|**new header, 3363 lines instead of 1529**|unchanged|
 
-For `dsh-sandbox-local/lib/index.js` (patch 5's target) there are two distinct
-builds: one hash for `0.1.0-rc.7`/`0.1.0-rc.8` and another for
-`0.1.1-rc.1`/`0.1.1-rc.2`; the patched hunk's surrounding context is identical
-in both, so the patch applies cleanly across all four anyway.
+For `dsh-sandbox-local/lib/index.js` (patch 5's target) there are two distinct builds: one hash for `0.1.0-rc.7`/`0.1.0-rc.8` and another for `0.1.1-rc.1`/`0.1.1-rc.2`; the patched hunk's surrounding context is identical in both, so the patch applies cleanly across all four anyway.
 
-**Patch 1 is anchored on one hunk now, on purpose.** The 0.1.3 session-format
-rollout (`refactor(session-persistence)!: handle-based seam`,
-`feat(session)!: add released format migration`) merged more modules into the
-bundle, and the hoisted `node:fs/promises` import grew `lstat` while lines
-appeared above it. Patch 1 used to begin by adding `rename` to that very
-import line, so the pre-release build stopped with
+**Patch 1 is anchored on one hunk now, on purpose.** The 0.1.3 session-format rollout (`refactor(session-persistence)!: handle-based seam`, `feat(session)!: add released format migration`) merged more modules into the bundle, and the hoisted `node:fs/promises` import grew `lstat` while lines appeared above it. Patch 1 used to begin by adding `rename` to that very import line, so the pre-release build stopped with
 
-    error: patch failed: .../dsh-session-persistence-jsonl/lib/index.js:1
+```text
+error: patch failed: .../dsh-session-persistence-jsonl/lib/index.js:1
+```
 
-on `0.1.3-alpha.2` — while the code it fixes was still there, untouched, 1,781
-lines further down. The hunk that edits the publish call applied (and applies)
-to both builds; only the import hunk had drifted. So patch 1 now carries that
-hunk alone and takes `rename` from `await import("node:fs/promises")` inside
-the error branch: an import header is precisely the part upstream churns, and
-on an error path one extra resolved promise costs nothing. Both channels were
-re-checked against the real artifacts (`0.1.2-rc.1` and `0.1.3-alpha.2`)
-through `dsh_apply_patch`: applies, marker present, re-apply idempotent, file
-still parses as ESM. `npm-dsh-fs-local-link-rename.patch` keeps its import
-hunk because that header has not moved — when it does, use the same recipe.
+on `0.1.3-alpha.2` — while the code it fixes was still there, untouched, 1,781 lines further down. The hunk that edits the publish call applied (and applies) to both builds; only the import hunk had drifted. So patch 1 now carries that hunk alone and takes `rename` from `await import("node:fs/promises")` inside the error branch: an import header is precisely the part upstream churns, and on an error path one extra resolved promise costs nothing. Both channels were re-checked against the real artifacts (`0.1.2-rc.1` and `0.1.3-alpha.2`) through `dsh_apply_patch`: applies, marker present, re-apply idempotent, file still parses as ESM. `npm-dsh-fs-local-link-rename.patch` keeps its import hunk because that header has not moved — when it does, use the same recipe.
 
-**The hunk's line number is a hint; its content is the contract.** Measured on
-pristine files: `git apply` finds a shifted context in **both** directions — a
-hunk declaring `1191` applied to the build where the context sits at `1125`
-(−66), and one declaring `1125` applied where it sits at `2,972` (+1,847). So
-re-anchoring a hunk at a different build's line number is not what broke the
-baseline, and the four positions below are recorded only to identify the
-contexts, not to rank them: `1,125` in `0.1.1-rc.2` (the build the sandbox
-baseline ships, git blob `66db7ec`), `1,191` in `0.1.2-alpha.4` and
-`0.1.2-rc.1`, `2,972` in `0.1.3-alpha.2`.
+**The hunk's line number is a hint; its content is the contract.** Measured on pristine files: `git apply` finds a shifted context in **both** directions — a hunk declaring `1191` applied to the build where the context sits at `1125` (−66), and one declaring `1125` applied where it sits at `2,972` (+1,847). So re-anchoring a hunk at a different build's line number is not what broke the baseline, and the four positions below are recorded only to identify the contexts, not to rank them: `1,125` in `0.1.1-rc.2` (the build the sandbox baseline ships, git blob `66db7ec`), `1,191` in `0.1.2-alpha.4` and `0.1.2-rc.1`, `2,972` in `0.1.3-alpha.2`.
 
-What *did* break the baseline is that `serve.sh` overlays the workspace patch
-set onto a tree the tarball already ships **patched** — and `dsh_apply_patch`'s
-idempotence is keyed to the bytes of the patch file in hand, so any regenerated
-patch fails there and reports upstream "version drift". That is a test-harness
-hole, fixed in `.test-install/serve.sh` (revert with the tarball's own
-`patches/` first); see `.test-install/README.md`, "工作区补丁集注入".
+What *did* break the baseline is that `serve.sh` overlays the workspace patch set onto a tree the tarball already ships **patched** — and `dsh_apply_patch`'s idempotence is keyed to the bytes of the patch file in hand, so any regenerated patch fails there and reports upstream "version drift". That is a test-harness hole, fixed in `.test-install/serve.sh` (revert with the tarball's own `patches/` first); see `.test-install/README.md`, "工作区补丁集注入".
 
-This hunk is nonetheless declared at the baseline's position (`@@ -1125`,
-`index 66db7ec`) so that the header, the base blob it names, and the oldest
-build it must serve all describe the same file — the way the shipped patch was
-cut in the first place. It costs nothing and keeps one obvious reference point.
+This hunk is nonetheless declared at the baseline's position (`@@ -1125`, `index 66db7ec`) so that the header, the base blob it names, and the oldest build it must serve all describe the same file — the way the shipped patch was cut in the first place. It costs nothing and keeps one obvious reference point.
 
-So the matrix a patch regeneration has to satisfy is not "the two versions
-that happen to be interesting", it is **every dsh build this project can put
-in front of a patch**: `baseline.env`'s pinned version, npm `latest` (what
-stable installs and what `patch-check` runs by default), and the pre channel's
-version. Check them as pristine files with the production helper — that costs
-four `curl`s to the registry, no builds:
+So the matrix a patch regeneration has to satisfy is not "the two versions that happen to be interesting", it is **every dsh build this project can put in front of a patch**: `baseline.env`'s pinned version, npm `latest` (what stable installs and what `patch-check` runs by default), and the pre channel's version. Check them as pristine files with the production helper — that costs four `curl`s to the registry, no builds:
 
 ```sh
 source scripts/patch-lib.sh
@@ -166,12 +104,7 @@ for v in "$(sed -n 's/^BASELINE_DSH_VERSION=//p' .test-install/baseline.env)" la
 done
 ```
 
-When a dsh update changes these lib files, `scripts/03-apply-patches.sh` or
-`scripts/update-dsh.sh` fails loudly instead of shipping unpatched libs, and
-the CI `patch-check` workflow catches the same drift — on every change to
-`patches/` or the registry, on the release-bound pull request, and on demand
-(`workflow_dispatch` accepts any npm spec, e.g. `@deepseek-ai/dsh@alpha`) — by
-applying the patches to that npm release. Regenerate a patch:
+When a dsh update changes these lib files, `scripts/03-apply-patches.sh` or `scripts/update-dsh.sh` fails loudly instead of shipping unpatched libs, and the CI `patch-check` workflow catches the same drift — on every change to `patches/` or the registry, on the release-bound pull request, and on demand (`workflow_dispatch` accepts any npm spec, e.g. `@deepseek-ai/dsh@alpha`) — by applying the patches to that npm release. Regenerate a patch:
 
 ```sh
 # in a scratch dir with the glibc node (see scripts/01, 02)
@@ -187,119 +120,46 @@ tar xzf <pkg>.tgz
 git diff --no-index <orig> <fixed>   # or use a tiny git repo + git diff
 ```
 
-`npm pack` is enough to reproduce and regenerate a drift, and upstream does
-publish its alphas there (`@deepseek-ai/dsh` `alpha` = `0.1.3-alpha.2` while
-`latest` = `0.1.2-rc.1`) — authoring a patch needs no local upstream build.
-But mind which artifact certifies what: `patch-check` applies the set to the
-**npm** build, while the pre-release workflow applies it to a tarball packed
-from the **source** tree. Both come off the same lock-pinned bundler, yet
-neither run implies the other, so a drift fixed against one is settled only
-when the other has gone green too — a `pre-release` `dry_run` dispatch does
-that without publishing anything.
+`npm pack` is enough to reproduce and regenerate a drift, and upstream does publish its alphas there (`@deepseek-ai/dsh` `alpha` = `0.1.3-alpha.2` while `latest` = `0.1.2-rc.1`) — authoring a patch needs no local upstream build. But mind which artifact certifies what: `patch-check` applies the set to the **npm** build, while the pre-release workflow applies it to a tarball packed from the **source** tree. Both come off the same lock-pinned bundler, yet neither run implies the other, so a drift fixed against one is settled only when the other has gone green too — a `pre-release` `dry_run` dispatch does that without publishing anything.
 
 #### Known gap: 0.1.3 grew a second hard-link publication
 
-`0.1.3` added a second `link()`-based publish: `publishCurrentExclusive()`
-(`src/generation.ts:829`, bundled into the same `lib/index.js` at its line
-2023, called from `publishPreparedMigration` at 2083). It goes through an
-injected facade — `internals.fs.link(staged, currentPath)` — catches only
-`EEXIST` as a lost race, and **rethrows every other errno**. The catalog that
-ships with `0.1.3-alpha.2` declares `currentVersion: 2`, so a v1 log opened for
-writing is migrated, and that migration publishes over a hard link: on Android
-it should fail with `EACCES` even with patch 1 applied. Read off the shipped
-artifacts, not reproduced on a device — nobody has run a v1→v2 migration on
-Termux yet.
+`0.1.3` added a second `link()`-based publish: `publishCurrentExclusive()` (`src/generation.ts:829`, bundled into the same `lib/index.js` at its line 2023, called from `publishPreparedMigration` at 2083). It goes through an injected facade — `internals.fs.link(staged, currentPath)` — catches only `EEXIST` as a lost race, and **rethrows every other errno**. The catalog that ships with `0.1.3-alpha.2` declares `currentVersion: 2`, so a v1 log opened for writing is migrated, and that migration publishes over a hard link: on Android it should fail with `EACCES` even with patch 1 applied. Read off the shipped artifacts, not reproduced on a device — nobody has run a v1→v2 migration on Termux yet.
 
-It is deliberately not patched here, because the registry cannot express it:
-`DSH_PATCH_SET` resolves marker and precondition **by target path**
-(`dsh_patch_entry_for` returns the first entry that claims a rel), so a second
-entry for the same `lib/index.js` would be read as the first — a conditional
-migration patch would be treated as mandatory and break every install of an
-older dsh. The two ways to close it, in order of preference:
+It is deliberately not patched here, because the registry cannot express it: `DSH_PATCH_SET` resolves marker and precondition **by target path** (`dsh_patch_entry_for` returns the first entry that claims a rel), so a second entry for the same `lib/index.js` would be read as the first — a conditional migration patch would be treated as mandatory and break every install of an older dsh. The two ways to close it, in order of preference:
 
-1. **Take it upstream.** The same errno-gated `rename` fallback in
-   `materializePosix` and `publishCurrentExclusive` is platform-agnostic and
-   preserves the EEXIST exclusivity contract; upstream shipping it kills both
-   hard-link patches — the patch file and its `DSH_PATCH_SET` line in
-   `scripts/patch-lib.sh` both go, same as if upstream shipped hard links for
-   Android.
-2. **Teach the registry to key by patch file** instead of by target path
-   (`dsh_patch_entry_for`, `dsh_patch_marker`, `dsh_patch_precondition`, plus
-   the shipped-registry parsers in `.test-install/sandbox-lib.sh` and the
-   `verify.yml` uniqueness assumption). That also lets a hunk live or die per
-   version instead of per file.
+1. **Take it upstream.** The same errno-gated `rename` fallback in `materializePosix` and `publishCurrentExclusive` is platform-agnostic and preserves the EEXIST exclusivity contract; upstream shipping it kills both hard-link patches — the patch file and its `DSH_PATCH_SET` line in `scripts/patch-lib.sh` both go, same as if upstream shipped hard links for Android.
+2. **Teach the registry to key by patch file** instead of by target path (`dsh_patch_entry_for`, `dsh_patch_marker`, `dsh_patch_precondition`, plus the shipped-registry parsers in `.test-install/sandbox-lib.sh` and the `verify.yml` uniqueness assumption). That also lets a hunk live or die per version instead of per file.
 
-   **Update (Patch 7): the re-key has landed** — entries now key by patch
-   file and one target lib carries several patches (see
-   [Patch 7](#patch-7-attachment-local-android-durability)), so a
-   `publishCurrentExclusive` fix is now *expressible*. It is still
-   deliberately not shipped: a rename fallback there changes the publication
-   from first-writer-wins to last-writer-wins, a concurrency-semantics
-   decision that belongs in its own reviewed change (or upstream's).
+   **Update (Patch 7): the re-key has landed** — entries now key by patch file and one target lib carries several patches (see [Patch 7](#patch-7-attachment-local-android-durability)), so a `publishCurrentExclusive` fix is now *expressible*. It is still deliberately not shipped: a rename fallback there changes the publication from first-writer-wins to last-writer-wins, a concurrency-semantics decision that belongs in its own reviewed change (or upstream's).
 
 #### 0.1.3 once needed a native module — compiled in CI, shipped with the runtime
 
-`0.1.3`'s session lease took a POSIX `flock(2)` through **`fs-ext`**
-(`src/lease.ts:34`, imported at the top of the bundle), and `fs-ext@2.1.1`
-became a real dependency of `@deepseek-ai/dsh-session-persistence-jsonl` —
-`0.1.2-rc.1` mentions it nowhere. `fs-ext` shipped no prebuilds and no
-`binary` field; its `install` script was `node-gyp configure build`.
-**dsh 0.1.5 removed the dependency**: upstream folded the lease functionality
-in and ships its own prebuilt package — today no dsh dependency needs
-compiling.
+`0.1.3`'s session lease took a POSIX `flock(2)` through **`fs-ext`** (`src/lease.ts:34`, imported at the top of the bundle), and `fs-ext@2.1.1` became a real dependency of `@deepseek-ai/dsh-session-persistence-jsonl` — `0.1.2-rc.1` mentions it nowhere. `fs-ext` shipped no prebuilds and no `binary` field; its `install` script was `node-gyp configure build`. **dsh 0.1.5 removed the dependency**: upstream folded the lease functionality in and ships its own prebuilt package — today no dsh dependency needs compiling.
 
-Every dsh install in this project runs npm with `--ignore-scripts`
-(`scripts/02-install-dsh.sh`, `scripts/update-dsh.sh`, `build/build-runtime.sh`,
-CI `patch-check`) — a policy that exists for koffi, whose linux-arm64 prebuild
-npm resolves without a build step anyway. On 0.1.3 that settled differently:
-nothing compiled `fs_ext.node`, and dsh died during boot, before any patch
-marker mattered:
+Every dsh install in this project runs npm with `--ignore-scripts` (`scripts/02-install-dsh.sh`, `scripts/update-dsh.sh`, `build/build-runtime.sh`, CI `patch-check`) — a policy that exists for koffi, whose linux-arm64 prebuild npm resolves without a build step anyway. On 0.1.3 that settled differently: nothing compiled `fs_ext.node`, and dsh died during boot, before any patch marker mattered:
 
-    Error: Cannot find module './build/Release/fs_ext.node'
-    Require stack: .../node_modules/fs-ext/fs-ext.js
-    ... failed to import loader entry session-persistence-jsonl
+```text
+Error: Cannot find module './build/Release/fs_ext.node'
+Require stack: .../node_modules/fs-ext/fs-ext.js
+... failed to import loader entry session-persistence-jsonl
+```
 
-First seen in `patch-check` at `@alpha` (run `34172320516`), then reproduced on
-a device through the channel-test sandbox — patches all green, web refusing to
-boot. **The fix shipped the compiled binary instead of stubbing the lease**:
-a stub would have silently dropped the lock that keeps two dsh processes from
-holding the same session — upstream's correctness boundary, not ours to remove.
+First seen in `patch-check` at `@alpha` (run `34172320516`), then reproduced on a device through the channel-test sandbox — patches all green, web refusing to boot. **The fix shipped the compiled binary instead of stubbing the lease**: a stub would have silently dropped the lock that keeps two dsh processes from holding the same session — upstream's correctness boundary, not ours to remove.
 
-The machinery remains in the scripts to serve installs pinned to 0.1.3/0.1.4;
-on a dsh >= 0.1.5 tree it no-ops (`ensure_native_prebuilds` finds nothing
-missing and reports "no native addons required by this dsh build"):
+The machinery remains in the scripts to serve installs pinned to 0.1.3/0.1.4; on a dsh >= 0.1.5 tree it no-ops (`ensure_native_prebuilds` finds nothing missing and reports "no native addons required by this dsh build"):
 
-- `native_prebuild_entries` in `scripts/common.sh` is the registry
-  (`fs-ext:build/Release/fs_ext.node`, its only entry). Three consumers derive from it:
-  `build_native_addons` (compile on a machine that has a toolchain —
-  `build-runtime.sh` and CI `patch-check`), `ensure_native_prebuilds` (device
-  overlay — `update-dsh.sh` and `02-install-dsh.sh` fetch
-  `dsh-termux-natives.tar.gz` from the release whose tag names the installed
-  dsh version), and `verify_native_prebuilds` (assert installed ⇒ artifact ⇒
-  loads; r2 runs it against the shipped tarball).
-- The compile ends with a `require()` of the package by the very node that
-  will run it — an ABI/platform mismatch is caught on the spot, not on a
-  device an ocean away.
-- Termux has no glibc toolchain, so devices never compile; they fetch. That is
-  also why `dsh update -t alpha` cannot self-assemble one.
+- `native_prebuild_entries` in `scripts/common.sh` is the registry (`fs-ext:build/Release/fs_ext.node`, its only entry). Three consumers derive from it: `build_native_addons` (compile on a machine that has a toolchain — `build-runtime.sh` and CI `patch-check`), `ensure_native_prebuilds` (device overlay — `update-dsh.sh` and `02-install-dsh.sh` fetch `dsh-termux-natives.tar.gz` from the release whose tag names the installed dsh version), and `verify_native_prebuilds` (assert installed ⇒ artifact ⇒ loads; r2 runs it against the shipped tarball).
+- The compile ends with a `require()` of the package by the very node that will run it — an ABI/platform mismatch is caught on the spot, not on a device an ocean away.
+- Termux has no glibc toolchain, so devices never compile; they fetch. That is also why `dsh update -t alpha` cannot self-assemble one.
 
-Verified on device (2026-09-08): the CI-built `fs_ext.node` (linux-arm64
-glibc, node 24.19.0) loads, **`flock(2)` works on Android app-private
-storage** (exclusive non-blocking acquire + unlock probed through the real
-addon), and `dsh web` on 0.1.3-alpha.2 boots and serves — 401 without the
-handshake token, 303 through it, exactly like the stable pages.
-
+Verified on device (2026-09-08): the CI-built `fs_ext.node` (linux-arm64 glibc, node 24.19.0) loads, **`flock(2)` works on Android app-private storage** (exclusive non-blocking acquire + unlock probed through the real addon), and `dsh web` on 0.1.3-alpha.2 boots and serves — 401 without the handshake token, 303 through it, exactly like the stable pages.
 
 #### How the patches are applied
 
-Every caller — `scripts/03-apply-patches.sh`, `scripts/update-dsh.sh`,
-`build/build-runtime.sh` and `.github/workflows/patch-check.yml` — goes through
-`scripts/patch-lib.sh`, because applying these patches by hand has one sharp
-edge:
+Every caller — `scripts/03-apply-patches.sh`, `scripts/update-dsh.sh`, `build/build-runtime.sh` and `.github/workflows/patch-check.yml` — goes through `scripts/patch-lib.sh`, because applying these patches by hand has one sharp edge:
 
-> `git apply` resolves patch paths against the top of the **enclosing git work
-> tree** and silently drops every entry outside the current directory — it
-> prints `Skipped patch '...'.` and still **exits 0**.
+> `git apply` resolves patch paths against the top of the **enclosing git work tree** and silently drops every entry outside the current directory — it prints `Skipped patch '...'.` and still **exits 0**.
 
 So the naive form
 
@@ -307,444 +167,226 @@ So the naive form
 (cd "$WORK_DIR" && git apply --directory=node_modules/@deepseek-ai patch)
 ```
 
-works on a device (the runtime lives outside any repo) but patches *nothing*
-when `$WORK_DIR` is inside a git checkout, as it is in CI and in
-`build/build-runtime.sh`'s default runtime dir — while reporting success.
+works on a device (the runtime lives outside any repo) but patches *nothing* when `$WORK_DIR` is inside a git checkout, as it is in CI and in `build/build-runtime.sh`'s default runtime dir — while reporting success.
 
-`dsh_apply_patch` avoids this by prepending the work dir's prefix inside the
-enclosing work tree and by comparing the target's content id before and after,
-so an apply that changes nothing fails instead of shipping unpatched libs.
+`dsh_apply_patch` avoids this by prepending the work dir's prefix inside the enclosing work tree and by comparing the target's content id before and after, so an apply that changes nothing fails instead of shipping unpatched libs.
 
 ### Patch 5: Landlock tmpdir
 
-**Symptom**: under `workspace-write`, every sandboxed bash command that needs
-a temp area fails — `mktemp`, `mkstemp`, redirection to `$TMPDIR` — with
-`Permission denied` plus the `[sandbox: file access denied under
-workspace-write mode]` marker, while the write/edit tools can write `$TMPDIR`
-just fine. On Termux the only escape is escalating to `danger-full-access`.
+**Symptom**: under `workspace-write`, every sandboxed bash command that needs a temp area fails — `mktemp`, `mkstemp`, redirection to `$TMPDIR` — with `Permission denied` plus the `[sandbox: file access denied under workspace-write mode]` marker, while the write/edit tools can write `$TMPDIR` just fine. On Termux the only escape is escalating to `danger-full-access`.
 
 **Root cause**: three facts stack up.
 
-1. The Landlock dialect hardcodes its writable grants:
-   `landlockProfileArgs` (in `dsh-sandbox-local`) grants `readWrite =
-   ['/dev/null', '/tmp', workspaceRoot]` — `os.tmpdir()` is **not** in the
-   list. Termux sets `TMPDIR=/data/data/com.termux/files/usr/tmp`, a *real
-   directory distinct from `/tmp`*, so it is denied.
-2. The shared `writableRoots` helper (`dsh-sandbox`), which the in-process fs
-   fence **and** the macOS Seatbelt dialect both use, *does* include
-   `tmpdir()` — that is why the write tool succeeds where bash fails. The
-   upstream docstring of `writableRoots` itself says omitting `tmpdir()`
-   "would deny what the mode promises"; the Landlock dialect simply predates
-   that helper and was never aligned (the bwrap dialect has the same gap, hid
-   by its private `--tmpfs /tmp` mount).
-3. On this device the granted `/tmp` is a dead grant: a real directory owned
-   by `shell:shell`, mode 771 — the app uid cannot write there, so the OS
-   denies what Landlock allowed.
+1. The Landlock dialect hardcodes its writable grants: `landlockProfileArgs` (in `dsh-sandbox-local`) grants `readWrite = ['/dev/null', '/tmp', workspaceRoot]` — `os.tmpdir()` is **not** in the list. Termux sets `TMPDIR=/data/data/com.termux/files/usr/tmp`, a *real directory distinct from `/tmp`*, so it is denied.
+2. The shared `writableRoots` helper (`dsh-sandbox`), which the in-process fs fence **and** the macOS Seatbelt dialect both use, *does* include `tmpdir()` — that is why the write tool succeeds where bash fails. The upstream docstring of `writableRoots` itself says omitting `tmpdir()` "would deny what the mode promises"; the Landlock dialect simply predates that helper and was never aligned (the bwrap dialect has the same gap, hid by its private `--tmpfs /tmp` mount).
+3. On this device the granted `/tmp` is a dead grant: a real directory owned by `shell:shell`, mode 771 — the app uid cannot write there, so the OS denies what Landlock allowed.
 
-On desktop Linux the gap is invisible (`TMPDIR` unset → `os.tmpdir() ===
-'/tmp'`), which is why upstream never saw it; Termux is a "Linux with
-`TMPDIR ≠ /tmp`" deployment.
+On desktop Linux the gap is invisible (`TMPDIR` unset → `os.tmpdir() === '/tmp'`), which is why upstream never saw it; Termux is a "Linux with `TMPDIR ≠ /tmp`" deployment.
 
-**The patch** adds `tmpdir()` to the grant list — one line plus a marker
-comment (`dsh-termux-landlock-tmpdir`) inside `landlockProfileArgs`:
+**The patch** inserts one line after the mode grant, before the shared `return grantArgs({` tail — deliberately NOT editing the grant line itself, because upstream reshaped it in `0.2.2-alpha.2` (`readWrite.push("/tmp", ...workspaceWritableRoots(policy))`) while the tail is byte-identical and unique in every build (0.1.x, 0.2.1-rc.5, 0.2.2-alpha.2):
 
 ```js
-if (policy.mode === "workspace-write") readWrite.push("/tmp", tmpdir(), policy.workspaceRoot);
+// dsh-termux-landlock-tmpdir: ... (marker comment)
+if (policy.mode === "workspace-write") readWrite.push(tmpdir());
 ```
+
+Same grant, same condition, one patch for every code generation — no conditional entry, no precondition that the patch would have to survive.
 
 **Why this is not a security widening**:
 
-- the grant list is computed in the **harness process** (its own `tmpdir()`),
-  before the child exists; a sandboxed `export TMPDIR=/etc` changes only the
-  child's env, never the already-installed ruleset;
-- Landlock rules bind to **inodes** at exec time (`open(path, O_PATH)` →
-  `PATH_BENEATH`) and are inherited immutably across `execve` — no process in
-  the tree can append rules afterwards;
-- symlink/hardlink smuggling is still denied (Landlock evaluates resolved
-  paths; `REFER` needs write access at both ends; and SELinux already forbids
-  hard links in app-private storage — see patch 1);
-- the fs fence and the Seatbelt dialect grant exactly this `tmpdir()` today —
-  the patch brings the Landlock dialect up to the mode's documented contract,
-  it does not open a boundary the other dialects keep closed.
+- the grant list is computed in the **harness process** (its own `tmpdir()`), before the child exists; a sandboxed `export TMPDIR=/etc` changes only the child's env, never the already-installed ruleset;
+- Landlock rules bind to **inodes** at exec time (`open(path, O_PATH)` → `PATH_BENEATH`) and are inherited immutably across `execve` — no process in the tree can append rules afterwards;
+- symlink/hardlink smuggling is still denied (Landlock evaluates resolved paths; `REFER` needs write access at both ends; and SELinux already forbids hard links in app-private storage — see patch 1);
+- the fs fence and the Seatbelt dialect grant exactly this `tmpdir()` today — the patch brings the Landlock dialect up to the mode's documented contract, it does not open a boundary the other dialects keep closed.
 
-Verified experimentally (landlock-run launcher driven directly): with the
-stock grants a confined `sh -c 'echo x > "$TMPDIR/f"'` fails; adding
-`--rw $TMPDIR` makes it succeed; `/etc` writes stay denied; a nonexistent
-grant root fails closed with exit 125 and an explicit `landlock-run:` line
-(the launcher's own philosophy — it never silently narrows a grant).
+Verified experimentally (landlock-run launcher driven directly): with the stock grants a confined `sh -c 'echo x > "$TMPDIR/f"'` fails; adding `--rw $TMPDIR` makes it succeed; `/etc` writes stay denied; a nonexistent grant root fails closed with exit 125 and an explicit `landlock-run:` line (the launcher's own philosophy — it never silently narrows a grant).
 
 **Notes**:
 
-- applies only to sandboxed child processes; the harness's own temp dirs
-  (`dsh-spill-*` etc.) are unaffected. A **restart of `dsh web`** is required
-  to load the patched bundle (JS-file patching carries none of the in-place
-  patchelf risks of Fix 2);
-- if a user starts dsh with a bogus `TMPDIR` (nonexistent path), confined
-  commands fail at launcher start (exit 125, loud) instead of running with an
-  unwritable temp — consistent with the launcher's fail-closed design;
-- upstream fix tracked for the long term: the Landlock (and bwrap) dialects
-  should derive their temp grants from the shared `writableRoots` helper;
-- **deliberately not widened: `/dev/binder`.** Android's `am` — and therefore
-  every intent, including the `$BROWSER` opener — must open `/dev/binder`
-  `O_RDWR`, which `workspace-write` denies (measured: `exec 3</dev/binder`
-  succeeds, `exec 3<>/dev/binder` is denied), so running the opener **from the
-  agent's own bash tool** aborts with `Binder driver '/dev/binder' could not be
-  opened. Error: 13` and exit 134. That is not a regression from this patch —
-  the patch only *adds* `os.tmpdir()` to the grant list, and `/dev/binder` was
-  never in it — and it is not worth fixing: granting a confined child write
-  access to binder hands it the whole Android service surface, while the
-  browser handoff legitimately happens in the **dsh process** (`dsh web`'s own
-  startup open), which no agent sandbox confines. The serve.sh checklist says
-  so at item 4.
+- applies only to sandboxed child processes; the harness's own temp dirs (`dsh-spill-*` etc.) are unaffected. A **restart of `dsh web`** is required to load the patched bundle (JS-file patching carries none of the in-place patchelf risks of Fix 2);
+- if a user starts dsh with a bogus `TMPDIR` (nonexistent path), confined commands fail at launcher start (exit 125, loud) instead of running with an unwritable temp — consistent with the launcher's fail-closed design;
+- upstream fix tracked for the long term: the Landlock (and bwrap) dialects should derive their temp grants from the shared `writableRoots` helper;
+- **deliberately not widened: `/dev/binder`.** Android's `am` — and therefore every intent, including the `$BROWSER` opener — must open `/dev/binder` `O_RDWR`, which `workspace-write` denies (measured: `exec 3</dev/binder` succeeds, `exec 3<>/dev/binder` is denied), so running the opener **from the agent's own bash tool** aborts with `Binder driver '/dev/binder' could not be opened. Error: 13` and exit 134. That is not a regression from this patch — the patch only *adds* `os.tmpdir()` to the grant list, and `/dev/binder` was never in it — and it is not worth fixing: granting a confined child write access to binder hands it the whole Android service surface, while the browser handoff legitimately happens in the **dsh process** (`dsh web`'s own startup open), which no agent sandbox confines.
+  The serve.sh checklist says so at item 4.
 
 ### Patch 6: browser-session cookie SameSite
 
-**Symptom** (dsh >= 0.1.2 only): `dsh web` opens the browser by itself and the
-tab shows one line —
+**Symptom** (dsh >= 0.1.2 only): `dsh web` opens the browser by itself and the tab shows one line —
 
-```
+```text
 dsh web authentication required; reopen the URL printed by dsh web.
 ```
 
-Reloading that tab does not help. Copying the URL `dsh web` printed and pasting
-it into the address bar does, every time.
+Reloading that tab does not help. Copying the URL `dsh web` printed and pasting it into the address bar does, every time.
 
-**Root cause**: 0.1.2 authenticates the whole Web Host. The URL `dsh web` prints
-— and hands to the opener — is a one-shot handshake: `GET /?token=…` mints a
-session cookie and answers `303 See Other` to a clean `/`. That cookie is
-`SameSite=Strict`. Android opens the browser through an
-`android.intent.action.VIEW` intent, and Chromium classifies an externally
-initiated navigation as **cross-site**, so the Strict cookie is withheld on the
-very next hop (the redirect to `/`) and the request arrives unauthenticated.
+**Root cause**: 0.1.2 authenticates the whole Web Host. The URL `dsh web` prints — and hands to the opener — is a one-shot handshake: `GET /?token=…` mints a session cookie and answers `303 See Other` to a clean `/`. That cookie is `SameSite=Strict`. Android opens the browser through an `android.intent.action.VIEW` intent, and Chromium classifies an externally initiated navigation as **cross-site**, so the Strict cookie is withheld on the very next hop (the redirect to `/`) and the request arrives unauthenticated.
 
-Measured on-device with a probe that replays the handshake and sets three
-cookies in the same response:
+Measured on-device with a probe that replays the handshake and sets three cookies in the same response:
 
-| navigation | `Sec-Fetch-Site` | `Strict` | `Lax` | no attribute |
+|navigation|`Sec-Fetch-Site`|`Strict`|`Lax`|no attribute|
 |---|---|---|---|---|
-| `curl -L` with a cookie jar (control) | – | sent | sent | sent |
-| intent-opened tab, both hops | `cross-site` | **missing** | sent | sent |
-| 20 x reload of that tab (`Sec-Fetch-User: ?1`) | `cross-site` | **missing** | sent | sent |
+|`curl -L` with a cookie jar (control)|–|sent|sent|sent|
+|intent-opened tab, both hops|`cross-site`|**missing**|sent|sent|
+|20 x reload of that tab (`Sec-Fetch-User: ?1`)|`cross-site`|**missing**|sent|sent|
 
-The reload row is the one that matters: the classification survives a reload,
-so the 401 tab cannot heal itself and the message's own advice only works when
-a human retypes the URL. Nothing in this project's handoff is at fault — the
-opener passes the URL verbatim and the browser really does request
-`GET /?token=…`. It is also not Termux-specific: any OS-level URL handoff
-(desktop notification, IDE, another app's `xdg-open`) navigates cross-site.
+The reload row is the one that matters: the classification survives a reload, so the 401 tab cannot heal itself and the message's own advice only works when a human retypes the URL. Nothing in this project's handoff is at fault — the opener passes the URL verbatim and the browser really does request `GET /?token=…`. It is also not Termux-specific: any OS-level URL handoff (desktop notification, IDE, another app's `xdg-open`) navigates cross-site.
 
-**The patch** changes that one cookie to `SameSite=Lax` and leaves the marker
-`dsh-termux-samesite-lax` in `sessionCookie()`:
+**The patch** changes that one cookie to `SameSite=Lax` and leaves the marker `dsh-termux-samesite-lax` in `sessionCookie()`. Since 0.2.x the function takes a `secure` parameter and builds an attributes `const` first, so the patch edits that line:
 
 ```js
-return `${name}=${value}; …; HttpOnly; SameSite=Lax`;
+const attributes = `${name}=${value}; …; HttpOnly; SameSite=Lax`;
+return secure ? `${attributes}; Secure` : attributes;
 ```
 
-**Why this is not a security widening**: Lax is still withheld from cross-site
-`fetch`/XHR/WebSocket handshakes and cross-site form POSTs; it travels only on
-top-level GET navigations, which is exactly — and only — the flow the token
-exchange needs. Upstream's Host/Origin/Fetch-Metadata fence still runs first
-and answers 403 before authentication is consulted, and the cookie keeps every
-other attribute (`HttpOnly`, host-only, authority-bound, absolute lifetime).
+**Why this is not a security widening**: Lax is still withheld from cross-site `fetch`/XHR/WebSocket handshakes and cross-site form POSTs; it travels only on top-level GET navigations, which is exactly — and only — the flow the token exchange needs. Upstream's Host/Origin/Fetch-Metadata fence still runs first and answers 403 before authentication is consulted, and the cookie keeps every other attribute (`HttpOnly`, host-only, authority-bound, absolute lifetime).
 
-**Why it is the registry's first conditional entry**: the code it edits exists
-only in dsh >= 0.1.2, while npm `latest` is still `0.1.1-rc.2`, which has no
-browser authentication at all. An unconditional entry would therefore break
-every install on the stable channel. The entry gates on `dsh-auth-` — upstream's
-cookie-name prefix, which the patch does not touch — so an older dsh prints
-`-- skipped: no 'dsh-auth-' in this dsh version` and requires no marker, while
-0.1.2 and later must apply it. Verifying it in CI therefore needs a
-`patch-check` dispatch aimed at `@deepseek-ai/dsh@alpha`; the automatic runs
-install `latest` and legitimately report it as not applicable.
+**Why it is the registry's first conditional entry**: the code it edits exists only in dsh >= 0.1.2. The entry gates on `dsh-auth-` — upstream's cookie-name prefix, which the patch does not touch — so an older dsh (e.g. `0.1.1-rc.2`, which has no browser authentication at all) prints `-- skipped: no 'dsh-auth-' in this dsh version` and requires no marker, while every later version — including npm `latest` — must apply it. Verifying it in CI therefore needs a `patch-check` dispatch aimed at a version that carries the code (e.g. `@deepseek-ai/dsh@latest` or `@alpha`); runs against a pre-0.1.2 install legitimately report it as not applicable.
 
-**Upstream**: the real fix is `SameSite=Lax` in upstream's own
-`browser-auth.ts`; a Discussion post making that case is drafted. Once upstream
-ships it, this entry can be dropped — the marker check will say so loudly.
+**Upstream**: the real fix is `SameSite=Lax` in upstream's own `browser-auth.ts`; a Discussion post making that case is drafted. Once upstream ships it, this entry can be dropped — the marker check will say so loudly.
 
 ### Patch 7: attachment-local Android durability
 
-**Symptom**: every image-attachment path fails on a Termux device — pasting an
-image, the composer's paperclip, and the agent's `read_image` tool all die, and
-`~/.dsh/attachments` is never even created (the live session store contains
-zero image blocks). The composer UI is blameless: with the image in the *system*
-clipboard, a desktop-class Chromium delivers the `paste` file item and dsh
-accepts it (verified with an on-device probe page) — the failure is purely
-host-side storage.
+**Symptom**: every image-attachment path fails on a Termux device — pasting an image, the composer's paperclip, and the agent's `read_image` tool all die, and `~/.dsh/attachments` is never even created (the live session store contains zero image blocks). The composer UI is blameless: with the image in the *system* clipboard, a desktop-class Chromium delivers the `paste` file item and dsh accepts it (verified with an on-device probe page) — the failure is purely host-side storage.
 
-**Root cause**: two independent Android incompatibilities stack in
-`dsh-attachment-local`'s publish path, so `commitPreparedImageFile` cannot ever
-succeed:
+**Root cause**: two independent Android incompatibilities stack in `dsh-attachment-local`'s publish path, so `commitPreparedImageFile` cannot ever succeed:
 
-1. `saveImage` → `ensureDurableHome(DSH_HOME)` fsyncs every ancestor up to
-   `parse(home).root` — i.e. `/`. The app uid cannot open `/data/data`
-   (measured: `EACCES` on `/data/data`, `/data`, `/`), so the durability walk
-   aborts every commit before writing anything.
-2. The staged object is published with `link()` — Android SELinux forbids hard
-   links in app-private storage, the same root cause as
-   [Patch 1](#patch-1-hard-link-eacces), whose two patches predate this bundle
-   and do not cover it.
+1. `saveImage` → `ensureDurableHome(DSH_HOME)` fsyncs every ancestor up to `parse(home).root` — i.e. `/`. The app uid cannot open `/data/data` (measured: `EACCES` on `/data/data`, `/data`, `/`), so the durability walk aborts every commit before writing anything.
+2. The staged object is published with `link()` — Android SELinux forbids hard links in app-private storage, the same root cause as [Patch 1](#patch-1-hard-link-eacces), whose two patches predate this bundle and do not cover it.
 
-**Three patches, one per upstream code generation** (the registry keys entries
-by patch file, so one `lib/index.js` carries several):
+**Three patches, one per upstream code generation** (the registry keys entries by patch file, so one `lib/index.js` carries several):
 
-| Patch | Applies to | Marker | Fix |
+|Patch|Applies to|Marker|Fix|
 |---|---|---|---|
-| `npm-dsh-attachment-local-durable-walk.patch` | every published bundle (contexts identical `0.1.0-rc.8`→`0.1.5-alpha.1`) | `dsh-termux-att-durability` | `syncDirectory()` treats `EACCES`/`EPERM` on opening an ancestor as the durability boundary: a directory this process cannot even read is not its to fsync |
-| `npm-dsh-attachment-local-link-rename.patch` | `0.1.2` shape | `dsh-termux-att-link-rename` | `commitPreparedImageFile`'s `link(temporary, target)` falls back to `rename()` on the same errno list as patches 1–2; the consumed stage file's `unlink` is skipped on the rename path |
-| `npm-dsh-attachment-local-link-rename-015.patch` | `0.1.3+` shape | `dsh-termux-att-link-rename-015` | the refactored publish gets the same fallback at both call sites: `publishStagedObject` (rename, stage file consumed) and `publishImmutableAlias` (a **copy**, not rename — an alias must not move its source; the digest check arbitrates copy vs raced `EEXIST`) |
+|`npm-dsh-attachment-local-durable-walk.patch`|every published bundle (contexts identical `0.1.0-rc.8`→`0.1.5-alpha.1`)|`dsh-termux-att-durability`|`syncDirectory()` treats `EACCES`/`EPERM` on opening an ancestor as the durability boundary: a directory this process cannot even read is not its to fsync|
+|`npm-dsh-attachment-local-link-rename.patch`|`0.1.2` shape|`dsh-termux-att-link-rename`|`commitPreparedImageFile`'s `link(temporary, target)` falls back to `rename()` on the same errno list as patches 1–2; the consumed stage file's `unlink` is skipped on the rename path|
+|`npm-dsh-attachment-local-link-rename-015.patch`|`0.1.3+` shape|`dsh-termux-att-link-rename-015`|the refactored publish gets the same fallback at both call sites: `publishStagedObject` (rename, stage file consumed) and `publishImmutableAlias` (a **copy**, not rename — an alias must not move its source; the digest check arbitrates copy vs raced `EEXIST`)|
 
-Each link patch is conditional on the exact call it rewrites
-(`await link(temporary, target)` / `await link(staged.path, target)`), a string
-the patch keeps — so applicability cannot flip, and `0.1.2` installs print
-`-- skipped` for the 0.1.3+ patch while `0.1.3+` installs skip the 0.1.2 one.
-The walk patch is unconditional: its hunk's context is byte-identical across
-every npm generation this project can put in front of it.
+Each link patch is conditional on the exact call it rewrites (`await link(temporary, target)` / `await link(staged.path, target)`), a string the patch keeps — so applicability cannot flip, and `0.1.2` installs print `-- skipped` for the 0.1.3+ patch while `0.1.3+` installs skip the 0.1.2 one. The walk patch is unconditional: its hunk's context is byte-identical across every npm generation this project can put in front of it.
 
-One semantic edge on the rename paths: an existing target is replaced rather
-than digest-verified — under content-addressed names that is equivalent in
-practice. The alias copy path keeps the full `EEXIST`-race digest arbitration.
+One semantic edge on the rename paths: an existing target is replaced rather than digest-verified — under content-addressed names that is equivalent in practice. The alias copy path keeps the full `EEXIST`-race digest arbitration.
 
-**Evidence** (real installed bundles, isolated repro with the storage root in
-the workspace — `repro.mjs`): pristine bundles →
-`COMMIT FAILED -> EACCES: permission denied, open '/data/data'`; patched →
-`COMMIT OK -> sha256:01effad6…` (idempotent, object mode `0400`, staging
-emptied) on **both** the `0.1.2-rc.1` and the `0.1.5-alpha.1` bundles; both
-parse as ESM; the production helper verifies apply + marker + reverse-reapply
-idempotence; the patch matrix runs the full set against `{baseline, npm alpha}`
-pristine trees including the shipped→workspace rebase. The third behavior
-probe (`attachment_durability_probe`, r2/r4/r5/serve, keyed on the walk
-marker) commits a 1×1 PNG through a `chmod 311` unreadable ancestor —
-`open(dir, O_RDONLY)` fails with exactly the errno the patch tolerates, a
-natural differential with no injection seam — and runs green on both
-generations. **The end-to-end device paths (paste, paperclip, `read_image`
-through a live `dsh web`) are still 待人类实测** via the serve.sh checklist.
+**Evidence** (real installed bundles, isolated repro with the storage root in the workspace — `repro.mjs`): pristine bundles → `COMMIT FAILED -> EACCES: permission denied, open '/data/data'`; patched → `COMMIT OK -> sha256:01effad6…` (idempotent, object mode `0400`, staging emptied) on **both** the `0.1.2-rc.1` and the `0.1.5-alpha.1` bundles; both parse as ESM; the production helper verifies apply + marker + reverse-reapply idempotence; the patch matrix runs the full set against `{baseline, npm alpha}` pristine trees including the shipped→workspace rebase. The third behavior probe (`attachment_durability_probe`, r2/r4/r5/serve, keyed on the walk marker) commits a 1×1 PNG through a `chmod 311` unreadable ancestor — `open(dir, O_RDONLY)` fails with exactly the errno the patch tolerates, a
+natural differential with no injection seam — and runs green on both generations. **The end-to-end device paths (paste, paperclip, `read_image` through a live `dsh web`) are still 待人类实测** via the serve.sh checklist.
 
-**Upstream anchors** — `dsh-attachment-local/lib/index.js`, hashed from the
-npm tarballs:
+**Upstream anchors** — `dsh-attachment-local/lib/index.js`, hashed from the npm tarballs:
 
-| dsh versions | git blob | shape |
+|dsh versions|git blob|shape|
 |---|---|---|
-| `0.1.0-rc.8` | `12810a5` | old (1 link site); contexts drifted — not served, ships its own registry |
-| `0.1.1-rc.2` | `5736b40` | old (1 link site); contexts drifted — not served, ships its own registry |
-| `0.1.2-rc.1` (baseline & npm `latest`) | `a56dc3d` | old — walk + link patches apply |
-| `0.1.3-alpha.2` | `fec538f` | new (2 link sites) — byte-identical to `0.1.5-alpha.1` |
-| `0.1.5-alpha.1` (npm `alpha`) | `fec538f` | new — walk + 0.1.3+ link patches apply |
+|`0.1.0-rc.8`|`12810a5`|old (1 link site); contexts drifted — not served, ships its own registry|
+|`0.1.1-rc.2`|`5736b40`|old (1 link site); contexts drifted — not served, ships its own registry|
+|`0.1.2-rc.1` (baseline & npm `latest`)|`a56dc3d`|old — walk + link patches apply|
+|`0.1.3-alpha.2`|`fec538f`|new (2 link sites) — byte-identical to `0.1.5-alpha.1`|
+|`0.1.5-alpha.1` (npm `alpha`)|`fec538f`|new — walk + 0.1.3+ link patches apply|
 
 #### Deliberately NOT patched (why they work now)
 
-| Old bionic patch | Why it is gone |
+|Old bionic patch|Why it is gone|
 |---|---|
-| `koffi` spawn.h / statx | glibc has `spawn.h`; and koffi loads `@koromix/koffi-linux-arm64` prebuilt |
-| `node-pty` build fixes | glibc node builds it normally, or the `linux-arm64` prebuild is used |
-| `sharp` wasm32 | `@img/sharp-linux-arm64` prebuilt is used |
-| grep/glob `rg` fallback | glibc node resolves `@vscode/ripgrep-linux-arm64` normally |
+|`koffi` spawn.h / statx|glibc has `spawn.h`; and koffi loads `@koromix/koffi-linux-arm64` prebuilt|
+|`node-pty` build fixes|glibc node builds it normally, or the `linux-arm64` prebuild is used|
+|`sharp` wasm32|`@img/sharp-linux-arm64` prebuilt is used|
+|grep/glob `rg` fallback|glibc node resolves `@vscode/ripgrep-linux-arm64` normally|
 
 ---
 
 ### Patch 8: session-generation publish link
 
-**Symptom** (0.1.3+ runtime, sessions saved by an older dsh): the conversation
-renders fine — history lives in the projection cache and the log reads back —
-but nothing that needs a *live* agent works. Sending a message errors out; the
-`/` menu never lists `compact`/`goal`/…; `+` does nothing; `@` loads neither
-files nor sessions. Sessions created (or re-opened and replied to) on the new
-runtime are unaffected.
+**Symptom** (0.1.3+ runtime, sessions saved by an older dsh): the conversation renders fine — history lives in the projection cache and the log reads back — but nothing that needs a *live* agent works. Sending a message errors out; the `/` menu never lists `compact`/`goal`/…; `+` does nothing; `@` loads neither files nor sessions. Sessions created (or re-opened and replied to) on the new runtime are unaffected.
 
-**Root cause**: pre-0.1.3 sessions are stored as format **v0**
-(`session.jsonl.zstd`); 0.1.3+ writes format **v3** (`session.v3.jsonl.zstd`)
-and migrates lazily. The migration is prepared on read — and *published* only
-on a write open, inside `publishCurrentExclusive`:
+**Root cause**: pre-0.1.3 sessions are stored as format **v0** (`session.jsonl.zstd`); 0.1.3+ writes format **v3** (`session.v3.jsonl.zstd`) and migrates lazily. The migration is prepared on read — and *published* only on a write open, inside `publishCurrentExclusive`:
 
 ```js
 await internals.fs.link(staged, currentPath);
 ```
 
-Android denies hard links ([Patch 1](#patch-1-hard-link-eacces)), so the
-publish dies with `EACCES: permission denied, link …/session.migration.<token>
-.jsonl.zstd.tmp -> …/session.v3.jsonl.zstd` — a call site patch 1's hunk does
-not reach. The agent loop resumes a session with `persistence.open(id,
-"write")` (`dsh-agent-loop`), so the write open fails, the agent never
-attaches, and every agent-scoped RPC (`commands/list`, `fileReferences/list`,
-`sessionReferenceResolver/candidates`, message submit) fails with it, while
-read-only rendering keeps working. One missing rename fallback, four UI
-symptoms.
+Android denies hard links ([Patch 1](#patch-1-hard-link-eacces)), so the publish dies with `EACCES: permission denied, link …/session.migration.<token> .jsonl.zstd.tmp -> …/session.v3.jsonl.zstd` — a call site patch 1's hunk does not reach. The agent loop resumes a session with `persistence.open(id, "write")` (`dsh-agent-loop`), so the write open fails, the agent never attaches, and every agent-scoped RPC (`commands/list`, `fileReferences/list`, `sessionReferenceResolver/candidates`, message submit) fails with it, while read-only rendering keeps working. One missing rename fallback, four UI symptoms.
 
 **Fix**: two conditional patches on the same anchor, one per bundled copy:
 
-| Patch | Target | Marker | Fix |
+|Patch|Target|Marker|Fix|
 |---|---|---|---|
-| `npm-dsh-session-persistence-jsonl-link-rename-015.patch` | `dsh-session-persistence-jsonl/lib/index.js` | `dsh-termux-session-link-rename-015` | `publishCurrentExclusive`'s catch falls back to `rename()` on the same errno list as patches 1–2 (`EACCES/EPERM/ENOTSUP/EOPNOTSUPP`) |
-| `npm-dsh-session-persistence-jsonl-worker-link-rename-015.patch` | `dsh-session-persistence-jsonl/lib/worker.cjs` | `dsh-termux-session-worker-link-rename-015` | the same call, bundled inside the migration **verifier worker** — dormant today (the worker entry runs `verify()` only), patched so it cannot silently resurrect the `EACCES` if publishing ever moves into the worker |
+|`npm-dsh-session-persistence-jsonl-link-rename-015.patch`|`dsh-session-persistence-jsonl/lib/index.js`|`dsh-termux-session-link-rename-015`|`publishCurrentExclusive`'s catch falls back to `rename()` on the same errno list as patches 1–2 (`EACCES/EPERM/ENOTSUP/EOPNOTSUPP`)|
+|`npm-dsh-session-persistence-jsonl-worker-link-rename-015.patch`|`dsh-session-persistence-jsonl/lib/worker.cjs`|`dsh-termux-session-worker-link-rename-015`|the same call, bundled inside the migration **verifier worker** — dormant today (the worker entry runs `verify()` only), patched so it cannot silently resurrect the `EACCES` if publishing ever moves into the worker|
 
-On the fallback: the stage file lives in the same session directory as the
-target, so the rename is atomic and same-filesystem; the flock write lease
-rules out a raced publication, and the prepared migration's digest
-verification still arbitrates the published bytes. `EEXIST` keeps propagating
-unchanged. Both entries are conditional on the exact rewritten call
-(`await internals.fs.link(staged, currentPath)`), a string the patches keep.
+On the fallback: the stage file lives in the same session directory as the target, so the rename is atomic and same-filesystem; the flock write lease rules out a raced publication, and the prepared migration's digest verification still arbitrates the published bytes. `EEXIST` keeps propagating unchanged. Both entries are conditional on the exact rewritten call (`await internals.fs.link(staged, currentPath)`), a string the patches keep.
 
-**Full-tree audit** (all hard-link call sites in the 0.1.5 runtime, two
-independent greps cross-checked): every other site is patched (patches 1–2,
-7) or safe by construction — `node-addon-native-custom-loader`'s `linkSync`
-carries its own rename fallback; `dsh-atomic-write`/`dsh-storage-json` use a
-rename protocol (their "link()+unlink()" comments describe a protocol they
-deliberately do *not* use); `dsh-app-boot` only symlinks (allowed on
-Android); `syncDirectory` fsyncs a single owned directory, never walks to the
-filesystem root. Nothing else in the dependency tree calls `link`/`linkSync`
-at runtime.
+**Full-tree audit** (all hard-link call sites in the 0.1.5 runtime, two independent greps cross-checked): every other site is patched (patches 1–2, 7) or safe by construction — `node-addon-native-custom-loader`'s `linkSync` carries its own rename fallback; `dsh-atomic-write`/`dsh-storage-json` use a rename protocol (their "link()+unlink()" comments describe a protocol they deliberately do *not* use); `dsh-app-boot` only symlinks (allowed on Android); `syncDirectory` fsyncs a single owned directory, never walks to the filesystem root. Nothing else in the dependency tree calls `link`/`linkSync` at runtime.
 
-**Upstream anchors** — `dsh-session-persistence-jsonl/lib/index.js`, hashed
-from the npm tarballs:
+**Upstream anchors** — `dsh-session-persistence-jsonl/lib/index.js`, hashed from the npm tarballs:
 
-| dsh versions | git blob | generation runtime (`internals.fs.link`) |
+|dsh versions|git blob|generation runtime (`internals.fs.link`)|
 |---|---|---|
-| `0.1.2-rc.1` (baseline & npm `latest`) | `f3ec1b6` | absent — patches print `-- skipped`; the bundle has no `worker.cjs` at all |
-| `0.1.3-alpha.2` | `f43834f` | present — hunks apply |
-| `0.1.5-alpha.1` (npm `alpha`) | `ce3c649` | present — hunks apply (worker.cjs blob `f4ecf06`) |
+|`0.1.2-rc.1` (baseline & npm `latest`)|`f3ec1b6`|absent — patches print `-- skipped`; the bundle has no `worker.cjs` at all|
+|`0.1.3-alpha.2`|`f43834f`|present — hunks apply|
+|`0.1.5-alpha.1` (npm `alpha`)|`ce3c649`|present — hunks apply (worker.cjs blob `f4ecf06`)|
 
-**Evidence** (agent-side, isolated copies in the workspace — no live runtime
-touched): unpatched 0.1.5-alpha.1 stack → read open of a v0 session OK, write
-open dies with exactly the `EACCES … link … session.v3.jsonl.zstd` above and
-publishes nothing; with the patches → write open OK and `session.v3.jsonl.zstd`
-published next to the untouched v0 artifact for every sampled old session,
-while the v3 control is byte-stable. Both pristine bundles parse as ESM/CJS
-after patching; `dsh_apply_patch` verifies apply + marker + reverse-reapply
-idempotence; the patch matrix runs the full set against
-`{baseline, npm alpha}` pristine trees, skipping the worker entry on 0.1.2
-where the file itself does not exist. **The end-to-end device paths
-(open an old session in `dsh web`, send, `/compact`, `@`) are still
-待人类实测** via the update acceptance steps.
+**Evidence** (agent-side, isolated copies in the workspace — no live runtime touched): unpatched 0.1.5-alpha.1 stack → read open of a v0 session OK, write open dies with exactly the `EACCES … link … session.v3.jsonl.zstd` above and publishes nothing; with the patches → write open OK and `session.v3.jsonl.zstd` published next to the untouched v0 artifact for every sampled old session, while the v3 control is byte-stable. Both pristine bundles parse as ESM/CJS after patching; `dsh_apply_patch` verifies apply + marker + reverse-reapply idempotence; the patch matrix runs the full set against `{baseline, npm alpha}` pristine trees, skipping the worker entry on 0.1.2 where the file itself does not exist.
+**The end-to-end device paths (open an old session in `dsh web`, send, `/compact`, `@`) are still 待人类实测** via the update acceptance steps.
 
 ---
 
 ## Part II — Environment fixes (no dsh code changes)
 
-Two Android/Termux launch facts, neither of which needs a dsh code change.
-Both had to be fixed in order: the `execPath` bug kills the opener child
-before it can `import('open')`, so the `$BROWSER` wiring stays invisible
-until the launcher runs at all.
+Two Android/Termux launch facts, neither of which needs a dsh code change. Both had to be fixed in order: the `execPath` bug kills the opener child before it can `import('open')`, so the `$BROWSER` wiring stays invisible until the launcher runs at all.
 
 ### Fix 2: direct exec
 
-Node's `process.execPath` is the **glibc loader**, not node, whenever node
-runs through `grun` (whose last line is `exec … ld.so $@`). dsh re-spawns
-`process.execPath` to run helpers, so `dsh web`'s browser handoff died with
-`ld-linux-aarch64.so.1: unrecognized option '--input-type=module'`. `grun`
-also word-splits its arguments (`source … $@` and `exec ld.so $@`, both
-unquoted), so `dsh "two words"` arrived as two argv entries.
+Node's `process.execPath` is the **glibc loader**, not node, whenever node runs through `grun` (whose last line is `exec … ld.so $@`). dsh re-spawns `process.execPath` to run helpers, so `dsh web`'s browser handoff died with `ld-linux-aarch64.so.1: unrecognized option '--input-type=module'`. `grun` also word-splits its arguments (`source … $@` and `exec ld.so $@`, both unquoted), so `dsh "two words"` arrived as two argv entries.
 
-| Android difference | How it is handled instead |
+|Android difference|How it is handled instead|
 |---|---|
-| `process.execPath` is the glibc loader; helper re-spawns get loader flags and die | `configure_glibc_node` in `scripts/common.sh` points node's ELF **interpreter** at Termux's glibc loader, and the generated wrapper execs node **directly** — no grun, all arguments quoted |
+|`process.execPath` is the glibc loader; helper re-spawns get loader flags and die|`configure_glibc_node` in `scripts/common.sh` points node's ELF **interpreter** at Termux's glibc loader, and the generated wrapper execs node **directly** — no grun, all arguments quoted|
 
 Emitted by `write_dsh_wrapper` / `configure_glibc_node`, guarded by CI.
 
 #### Two traps worth remembering
 
-**Patch only the interpreter.** `patchelf --set-interpreter … --set-rpath …` in
-one run produces a Node binary that **segfaults** (verified on node 22.20.0 with
-patchelf 0.19.1/aarch64; either option alone is fine). No rpath is needed —
-Termux's glibc loader already searches its own lib dir. CI rejects a reintroduced
-`--set-rpath`.
+**Patch only the interpreter.** `patchelf --set-interpreter … --set-rpath …` in one run produces a Node binary that **segfaults** (verified on node 22.20.0 with patchelf 0.19.1/aarch64; either option alone is fine). No rpath is needed — Termux's glibc loader already searches its own lib dir. CI rejects a reintroduced `--set-rpath`.
 
-**Never patch in place.** A running dsh has the binary `mmap`'d; rewriting those
-pages under it raises SIGBUS/SIGSEGV and kills the live process — an in-place
-`grun -c` killed a running `dsh web` during development. `configure_glibc_node`
-does copy → patch → verify the copy runs → atomic `mv`, so running processes keep
-their old inode and a bad patch can never replace a working node.
+**Never patch in place.** A running dsh has the binary `mmap`'d; rewriting those pages under it raises SIGBUS/SIGSEGV and kills the live process — an in-place `grun -c` killed a running `dsh web` during development. `configure_glibc_node` does copy → patch → verify the copy runs → atomic `mv`, so running processes keep their old inode and a bad patch can never replace a working node.
 
 ### Fix 3: browser handoff
 
-`process.platform === "linux"` makes the `open` package run its bundled
-freedesktop `xdg-open`, which exits 3 (`no method available`) on Android:
-xdg-open walks `x-www-browser`/`firefox`/`lynx`/`w3m`…, finds none, and dsh
-only awaits the spawn, so nothing is reported and nothing appears.
+`process.platform === "linux"` makes the `open` package run its bundled freedesktop `xdg-open`, which exits 3 (`no method available`) on Android: xdg-open walks `x-www-browser`/`firefox`/`lynx`/`w3m`…, finds none, and dsh only awaits the spawn, so nothing is reported and nothing appears.
 
-| Android difference | How it is handled instead |
+|Android difference|How it is handled instead|
 |---|---|
-| `open` finds no browser on Android | the wrapper points `BROWSER` at `work/dsh-termux-open`, an Android-intent opener emitted beside it. `xdg-open` reads `$BROWSER` before any desktop probe, and dsh's `native-path-opener` reads it directly, so one variable covers both |
+|`open` finds no browser on Android|the wrapper points `BROWSER` at `work/dsh-termux-open`, an Android-intent opener emitted beside it. `xdg-open` reads `$BROWSER` before any desktop probe, and dsh's `native-path-opener` reads it directly, so one variable covers both|
 
-Emitted by `write_dsh_opener`, guarded by CI. Nothing extra to install: both
-openers (`termux-open-url`, `termux-open`) ship in `termux-tools` (an
-Essential Termux package); Termux:API is not required.
+Emitted by `write_dsh_opener`, guarded by CI. Nothing extra to install: both openers (`termux-open-url`, `termux-open`) ship in `termux-tools` (an Essential Termux package); Termux:API is not required.
 
 #### Why the opener dispatches
 
-Those two `$BROWSER` call sites are handed different things: `dsh web` passes an
-http(s) URL (→ `termux-open-url`, i.e. `am start -a VIEW -d <url>`), while
-`host.openPath` passes a **file path** for `.html`/`.htm`/`.xhtml`/`.svg`
-(→ `termux-open`, because `am start -d <bare path>` cannot resolve an Intent and
-only `TermuxOpenReceiver` builds the `content://` URI a local file needs).
-Pointing `$BROWSER` straight at `termux-open-url` would fix the web handoff and
-break HTML/SVG file opens, which already worked through Termux's own `xdg-open`.
+Those two `$BROWSER` call sites are handed different things: `dsh web` passes an http(s) URL (→ `termux-open-url`, i.e. `am start -a VIEW -d <url>`), while `host.openPath` passes a **file path** for `.html`/`.htm`/`.xhtml`/`.svg` (→ `termux-open`, because `am start -d <bare path>` cannot resolve an Intent and only `TermuxOpenReceiver` builds the `content://` URI a local file needs). Pointing `$BROWSER` straight at `termux-open-url` would fix the web handoff and break HTML/SVG file opens, which already worked through Termux's own `xdg-open`.
 
-**Keep Termux in the foreground when you start `dsh web`.** Android 10+ blocks
-activity launches from background apps, so if you switch away first the intent
-is dropped silently and `am` still exits 0. Export your own `BROWSER` to
-override the choice, or pass `dsh web --no-open` to skip the handoff and just
-use the printed URL.
+**Keep Termux in the foreground when you start `dsh web`.** Android 10+ blocks activity launches from background apps, so if you switch away first the intent is dropped silently and `am` still exits 0. Export your own `BROWSER` to override the choice, or pass `dsh web --no-open` to skip the handoff and just use the printed URL.
 
 ### Fix 4: update shortcut
 
-Upstream dsh has **no** `update` subcommand or `--update` option — its top level
-is only the `web` and `plugin` subcommands plus `--profile`/`--patch`/`--dump-*`
-flags (see upstream `apps/cli/src/args.ts`), so bare `dsh update` always died
-with `error: --profile <name> is required`. The generated wrapper may therefore
-safely own that first argument:
+Upstream dsh has **no** `update` subcommand or `--update` option — its top level is only the `web` and `plugin` subcommands plus `--profile`/`--patch`/`--dump-*` flags (see upstream `apps/cli/src/args.ts`), so bare `dsh update` always died with `error: --profile <name> is required`. The generated wrapper may therefore safely own that first argument:
 
 ```sh
 dsh update -t next -y
 # exactly: bash ~/.local/opt/dsh-termux-runtime/scripts/update-dsh.sh -t next -y
 ```
 
-| Android difference | How it is handled instead |
+|Android difference|How it is handled instead|
 |---|---|
-| Option A installs have no repo checkout; the updater sits deep under `~/.local/opt/dsh-termux-runtime/scripts/` | `write_dsh_wrapper` takes an optional updater path (4th argument) and bakes an intercept into the wrapper: when `$1` is exactly `update`, it shifts and `exec bash <updater> "$@"`; anything else reaches dsh verbatim |
+|Option A installs have no repo checkout; the updater sits deep under `~/.local/opt/dsh-termux-runtime/scripts/`|`write_dsh_wrapper` takes an optional updater path (4th argument) and bakes an intercept into the wrapper: when `$1` is exactly `update`, it shifts and `exec bash <updater> "$@"`; anything else reaches dsh verbatim|
 
 Design notes:
 
-- **Only `$1` is inspected.** The launcher passes everything after its own flags
-  through to the booted app (`allowUnknownOption` + `passThroughOptions`), so
-  inner arguments such as `--profile tui update ...` still reach that app;
-- **the branch inherits the wrapper's environment** (`unset LD_PRELOAD`, glibc
-  bin dir first) — the same one node gets;
-- **a missing updater fails explicitly** (`exit 127`, pointing at reinstalling
-  the runtime or running `scripts/update-dsh.sh` directly) instead of dsh's
-  misleading "--profile required" error;
-- **graceful degradation**: callers without an updater path get no branch
-  emitted, so three-argument invocations behave byte-for-byte as before, and an
-  install run by an OLD generator against a NEW caller ignores the surplus
-  positional argument harmlessly (verified against the R1 baseline tarball);
-- if a future upstream release ever adds its own `dsh update`, this
-  interception shadows it — drop the fourth argument (regenerate the wrapper)
-  before reporting an upstream bug.
+- **Only `$1` is inspected.** The launcher passes everything after its own flags through to the booted app (`allowUnknownOption` + `passThroughOptions`), so inner arguments such as `--profile tui update ...` still reach that app;
+- **the branch inherits the wrapper's environment** (`unset LD_PRELOAD`, glibc bin dir first) — the same one node gets;
+- **a missing updater fails explicitly** (`exit 127`, pointing at reinstalling the runtime or running `scripts/update-dsh.sh` directly) instead of dsh's misleading "--profile required" error;
+- **graceful degradation**: callers without an updater path get no branch emitted, so three-argument invocations behave byte-for-byte as before, and an install run by an OLD generator against a NEW caller ignores the surplus positional argument harmlessly (verified against the R1 baseline tarball);
+- if a future upstream release ever adds its own `dsh update`, this interception shadows it — drop the fourth argument (regenerate the wrapper) before reporting an upstream bug.
 
-Emitted by `write_dsh_wrapper` when given the optional updater path — all three
-emitters pass it (`04-run-web.sh`, `update-dsh.sh`, `build/install.sh`). Not an
-environment fix strictly needed to *run* dsh: it is convenience built on the
-same single-source wrapper. Guarded by CI.
+Emitted by `write_dsh_wrapper` when given the optional updater path — all three emitters pass it (`04-run-web.sh`, `update-dsh.sh`, `build/install.sh`). Not an environment fix strictly needed to *run* dsh: it is convenience built on the same single-source wrapper. Guarded by CI.
 
 #### The updater is self-contained and self-updating
 
-The runtime bundles its own copy of the updater (`scripts/` + `patches/` +
-`VERSION` under the runtime root): Option A releases always shipped it, and
-since 1.2.1 Option B installs (`00-setup.sh`) copy it in before the wrapper is
-generated — so the wrapper's shortcut resolves the runtime-bundled updater
-first and no longer depends on the repo checkout staying put.
+The runtime bundles its own copy of the updater (`scripts/` + `patches/` + `VERSION` under the runtime root): Option A releases always shipped it, and since 1.2.1 Option B installs (`00-setup.sh`) copy it in before the wrapper is generated — so the wrapper's shortcut resolves the runtime-bundled updater first and no longer depends on the repo checkout staying put.
 
-npm updates move only the dsh version; the patch set moves with project
-releases. The updater closes that gap on two levels: every plain update
-compares the runtime's release identity with the latest GitHub release BEFORE
-touching npm and refreshes automatically when behind (the dsh version and the
-patch set then update in one command), and `dsh update --self` refreshes the
-machinery and **applies the refreshed patch set to the installed dsh directly**
-— no npm download or install. The refresh downloads the lightweight patch-set
-asset (`dsh-termux-patches.tar.gz`, ~40KB: the updater's three scripts +
-patches + VERSION — the whole bootstrap machinery, so future updater evolution
-travels with it), falling back to extracting those members from the full
-runtime tarball on releases without the asset. `--patch-set <dir|tar.gz>` takes
-the same set from a local source (offline; `build/build-patchset.sh` produces
-the asset layout), and `--force` re-applies when the content is unchanged.
-Runtimes from before 1.2.1 have no `VERSION` to compare: they keep updating via
-npm with their old patch set (plus a notice) — reinstalling gains the
-self-update machinery.
+npm updates move only the dsh version; the patch set moves with project releases. The updater closes that gap on two levels: every plain update compares the runtime's release identity with the latest GitHub release BEFORE touching npm and refreshes automatically when behind (the dsh version and the patch set then update in one command), and `dsh update --self` refreshes the machinery and **applies the refreshed patch set to the installed dsh directly** — no npm download or install. The refresh downloads the lightweight patch-set asset (`dsh-termux-patches.tar.gz`, ~40KB: the updater's three scripts + patches + VERSION — the whole bootstrap machinery, so future updater evolution travels with it), falling back to extracting those members from the full runtime tarball on releases without the
+asset. `--patch-set <dir|tar.gz>` takes the same set from a local source (offline; `build/build-patchset.sh` produces the asset layout), and `--force` re-applies when the content is unchanged. Runtimes from before 1.2.1 have no `VERSION` to compare: they keep updating via npm with their old patch set (plus a notice) — reinstalling gains the self-update machinery.
