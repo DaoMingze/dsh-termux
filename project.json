@@ -1,0 +1,13 @@
+{
+  "name": "dsh-termux",
+  "tagline": "dsh的termux部署实例",
+  "positioning": "dsh的termux部署",
+  "audience": "想在Android系统上基于termux使用dsh的用户",
+  "stage": "MVP",
+  "langs": [
+    "markdown"
+  ],
+  "hosts": [
+    "dsh"
+  ]
+}
